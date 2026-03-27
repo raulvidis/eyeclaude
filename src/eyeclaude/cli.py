@@ -288,12 +288,33 @@ def _send_pipe_message(data: dict) -> None:
         win32file.CloseHandle(handle)
 
 
-EYECLAUDE_HOOKS = {
-    "PreToolUse": {"type": "command", "command": "eyeclaude-hooks status working"},
-    "Stop": {"type": "command", "command": "eyeclaude-hooks status finished"},
-    "StopFailure": {"type": "command", "command": "eyeclaude-hooks status error"},
-    "UserPromptSubmit": {"type": "command", "command": "eyeclaude-hooks status idle"},
-}
+def _get_hooks_command(status: str) -> str:
+    """Get the full path command for eyeclaude-hooks."""
+    import shutil
+    # Try to find eyeclaude-hooks on PATH first
+    hooks_path = shutil.which("eyeclaude-hooks")
+    if hooks_path:
+        return f'"{hooks_path}" status {status}'
+    # Fallback: check common install locations
+    from pathlib import Path
+    candidates = [
+        Path.home() / "AppData/Local/Packages/PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0/LocalCache/local-packages/Python313/Scripts/eyeclaude-hooks.exe",
+        Path.home() / ".local/bin/eyeclaude-hooks",
+    ]
+    for c in candidates:
+        if c.exists():
+            return f'"{c}" status {status}'
+    # Last resort — hope it's on PATH at runtime
+    return f"eyeclaude-hooks status {status}"
+
+
+def _build_hooks_config() -> dict:
+    return {
+        "PreToolUse": {"type": "command", "command": _get_hooks_command("working")},
+        "Stop": {"type": "command", "command": _get_hooks_command("finished")},
+        "StopFailure": {"type": "command", "command": _get_hooks_command("error")},
+        "UserPromptSubmit": {"type": "command", "command": _get_hooks_command("idle")},
+    }
 
 
 def _load_settings() -> tuple[Path, dict]:
@@ -304,8 +325,8 @@ def _load_settings() -> tuple[Path, dict]:
     settings = {}
     if settings_path.exists():
         try:
-            settings = json.loads(settings_path.read_text())
-        except json.JSONDecodeError:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             settings = {}
     return settings_path, settings
 
@@ -317,18 +338,19 @@ def _install_claude_hooks():
     if "hooks" not in settings:
         settings["hooks"] = {}
 
-    for event_name, hook_def in EYECLAUDE_HOOKS.items():
+    hooks_config = _build_hooks_config()
+    for event_name, hook_def in hooks_config.items():
         if event_name not in settings["hooks"]:
             settings["hooks"][event_name] = []
-        # Check if our hook is already installed
+        # Check if an eyeclaude hook is already installed
         already_installed = any(
-            any(h.get("command") == hook_def["command"] for h in entry.get("hooks", []))
+            any("eyeclaude-hooks" in h.get("command", "") for h in entry.get("hooks", []))
             for entry in settings["hooks"][event_name]
         )
         if not already_installed:
             settings["hooks"][event_name].append({"hooks": [hook_def]})
 
-    settings_path.write_text(json.dumps(settings, indent=2))
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
 def _remove_claude_hooks():
@@ -338,11 +360,11 @@ def _remove_claude_hooks():
     if "hooks" not in settings:
         return
 
-    for event_name, hook_def in EYECLAUDE_HOOKS.items():
+    for event_name in ["PreToolUse", "Stop", "StopFailure", "UserPromptSubmit"]:
         if event_name in settings["hooks"]:
             settings["hooks"][event_name] = [
                 entry for entry in settings["hooks"][event_name]
-                if not any(h.get("command") == hook_def["command"] for h in entry.get("hooks", []))
+                if not any("eyeclaude-hooks" in h.get("command", "") for h in entry.get("hooks", []))
             ]
             if not settings["hooks"][event_name]:
                 del settings["hooks"][event_name]
@@ -350,7 +372,7 @@ def _remove_claude_hooks():
     if not settings["hooks"]:
         del settings["hooks"]
 
-    settings_path.write_text(json.dumps(settings, indent=2))
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
