@@ -120,11 +120,10 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         iris_x = (l_iris.x + r_iris.x) / 2
 
-        # X: iris offset from nose (amplified, negated).
-        # In the flipped webcam frame, looking left with eyes moves the
-        # iris RIGHT in image space (higher iris_x). Negating corrects
-        # this so eye movement adds in the same direction as head movement.
-        offset_x = nose.x - iris_x
+        # X: iris offset from nose (amplified).
+        # Looking left → iris moves left in flipped frame → iris_x < nose.x
+        # → offset negative → gaze_x decreases → maps to screen left ✓
+        offset_x = iris_x - nose.x
         amp_x = 8.0
         gaze_x = nose.x + offset_x * amp_x
 
