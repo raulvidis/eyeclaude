@@ -314,12 +314,19 @@ class CalibrationOverlay:
 
         if self._bound_step_index >= len(BOUND_STEPS):
             self._bounds_done = True
-            self._x_inverted = True
-            self._y_inverted = True
-            logger.info("Bounds: left=%.4f right=%.4f top=%.4f bottom=%.4f",
-                        self._bounds["left"], self._bounds["right"],
-                        self._bounds["top"], self._bounds["bottom"])
-            self._set_status(BOUND_DONE_MSG)
+            self._x_inverted = False
+            self._y_inverted = False
+            bl = self._bounds["left"]
+            br = self._bounds["right"]
+            bt = self._bounds["top"]
+            bb = self._bounds["bottom"]
+            x_range = br - bl
+            y_range = bb - bt
+            print(f"  Bounds: L={bl:.4f} R={br:.4f} (range={x_range:.4f}) T={bt:.4f} B={bb:.4f} (range={y_range:.4f})")
+            self._set_status(
+                f"X:[{bl:.3f}..{br:.3f}] Y:[{bt:.3f}..{bb:.3f}] | "
+                f"R=recalibrate ESC=done"
+            )
             self._update_edge_marker()
         else:
             next_step = BOUND_STEPS[self._bound_step_index]
@@ -411,7 +418,7 @@ class CalibrationOverlay:
             self._debug_counter = 0
         self._debug_counter += 1
         if self._debug_counter % 30 == 0 and self._bounds_done:
-            print(f"  gaze=({gaze_x:.3f},{gaze_y:.3f}) norm=({norm_x:.2f},{norm_y:.2f}) screen=({sx},{sy})")
+            print(f"  gaze=({gaze_x:.3f},{gaze_y:.3f}) bounds_x=[{self._bounds['left']:.3f}..{self._bounds['right']:.3f}] norm=({norm_x:.2f},{norm_y:.2f}) screen=({sx},{sy})")
 
         return (max(0, min(screen_w, sx)), max(0, min(screen_h, sy)))
 
