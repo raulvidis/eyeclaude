@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eyeclaude"
+version = "0.1.0"
+description = "Eye-tracking focus manager for Claude Code"
+requires-python = ">=3.12"
+dependencies = [
+    "mediapipe>=0.10.33",
+    "opencv-contrib-python>=4.8",
+    "pywin32>=306",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+]
+
+[project.scripts]
+eyeclaude = "eyeclaude.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
