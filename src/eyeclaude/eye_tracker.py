@@ -102,29 +102,35 @@ class DwellTracker:
 
 
 def _get_iris_center(landmarks) -> tuple[float, float] | None:
-    """Extract gaze direction using nose tip + iris offset.
+    """Extract gaze direction using amplified iris-nose offset + head pose.
 
-    Pure iris tracking gives too small a signal (~0.05 range). Instead we
-    combine head pose (nose tip position) with the iris-to-nose offset.
-    When you look at screen corners you both move your eyes AND slightly
-    turn your head, so this combined signal is much stronger.
+    The iris-to-nose offset captures where you're looking independent of
+    head position. We amplify this offset and add it to the nose position
+    (which captures head turns). Small eye movements get multiplied into
+    large quadrant-distinguishing signals.
 
     Returns (x, y) where the values represent relative gaze direction.
     """
     try:
-        # Nose tip (landmark 1) tracks head pose well
+        # Nose tip (landmark 1) tracks head pose
         nose = landmarks[1]
 
-        # Average iris position
+        # Average iris position from both eyes
         l_iris = landmarks[LEFT_IRIS_CENTER]
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         iris_x = (l_iris.x + r_iris.x) / 2
         iris_y = (l_iris.y + r_iris.y) / 2
 
-        # Combine: nose gives head direction, iris offset adds eye movement
-        # Weight nose more since it has a larger signal
-        gaze_x = nose.x * 0.7 + iris_x * 0.3
-        gaze_y = nose.y * 0.7 + iris_y * 0.3
+        # Iris offset from nose — this is the eye movement signal
+        # Even small eye movements produce a detectable offset
+        offset_x = iris_x - nose.x
+        offset_y = iris_y - nose.y
+
+        # Amplify the offset to make small eye movements matter more
+        # Then combine with nose position for head-turn contribution
+        amplification = 8.0
+        gaze_x = nose.x + offset_x * amplification
+        gaze_y = nose.y + offset_y * amplification
 
         return (gaze_x, gaze_y)
     except (IndexError, AttributeError):
