@@ -35,7 +35,6 @@ def main():
 
 def _install_statusline():
     """Replace ccstatusline with eyeclaude-statusline wrapper in settings.json."""
-    import shutil
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
         return
@@ -49,11 +48,9 @@ def _install_statusline():
     if "statusLine" in settings:
         backup_path.write_text(json.dumps(settings["statusLine"]), encoding="utf-8")
 
-    wrapper_cmd = shutil.which("eyeclaude-statusline")
-    if wrapper_cmd:
-        cmd = f'"{wrapper_cmd}"'
-    else:
-        cmd = "eyeclaude-statusline"
+    # Use the same Python interpreter to run the wrapper module directly.
+    # This avoids PATH issues with pip-installed scripts on Windows.
+    cmd = f'"{sys.executable}" -m eyeclaude.statusline_wrapper'
 
     settings["statusLine"] = {
         "type": "command",

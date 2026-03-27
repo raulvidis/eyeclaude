@@ -310,18 +310,18 @@ class CalibrationOverlay:
             pos = self._gaze_pos
 
         if pos and self._gaze_dot_id:
-            # pos is normalized (0-1), convert to screen coords
             screen_w = self._root.winfo_screenwidth()
             screen_h = self._root.winfo_screenheight()
-            # The gaze values from _get_iris_center are nose-relative amplified values.
-            # For the live pointer we scale them to approximate screen position.
-            # This won't be perfect pre-calibration but gives directional feedback.
-            sx = int(pos[0] * screen_w)
-            sy = int(pos[1] * screen_h)
+            # _get_iris_center returns amplified nose-relative values that can
+            # exceed [0,1]. Clamp to screen bounds so the dot stays visible.
+            sx = max(0, min(screen_w, int(pos[0] * screen_w)))
+            sy = max(0, min(screen_h, int(pos[1] * screen_h)))
             r = self.GAZE_DOT_RADIUS
             self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
+            # Raise dot above other canvas items so it's always visible
+            self._canvas.tag_raise(self._gaze_dot_id)
 
-            # If recording, add this sample
+            # If recording, add this sample (raw values, not clamped)
             if self._state.recording:
                 self._state.add_sample(pos[0], pos[1])
 
