@@ -1,0 +1,151 @@
+"""MediaPipe iris tracking and gaze-to-quadrant mapping."""
+
+import logging
+import math
+import threading
+import time
+from dataclasses import dataclass, field
+
+import cv2
+import mediapipe as mp
+
+from eyeclaude.shared_state import Quadrant, SharedState
+
+logger = logging.getLogger(__name__)
+
+# MediaPipe iris landmark indices (refine_landmarks=True required)
+LEFT_IRIS_CENTER = 468
+RIGHT_IRIS_CENTER = 473
+
+
+@dataclass
+class CalibrationData:
+    """Maps each quadrant to its calibrated iris position (normalized x, y)."""
+    points: dict[Quadrant, tuple[float, float]] = field(default_factory=dict)
+
+
+def map_gaze_to_quadrant(
+    gaze: tuple[float, float], calibration: CalibrationData
+) -> Quadrant:
+    """Find the nearest calibrated quadrant to the current gaze position."""
+    gx, gy = gaze
+    best_quadrant = Quadrant.TOP_LEFT
+    best_dist = float("inf")
+
+    for quadrant, (cx, cy) in calibration.points.items():
+        dist = math.hypot(gx - cx, gy - cy)
+        if dist < best_dist:
+            best_dist = dist
+            best_quadrant = quadrant
+
+    return best_quadrant
+
+
+class DwellTracker:
+    """Tracks gaze dwell time to avoid accidental focus switches."""
+
+    def __init__(self, dwell_time_ms: int = 400):
+        self._dwell_time_ms = dwell_time_ms
+        self._current_quadrant: Quadrant | None = None
+        self._dwell_start_ms: float = 0
+        self._last_activated: Quadrant | None = None
+
+    def update(
+        self, quadrant: Quadrant | None, timestamp_ms: float
+    ) -> Quadrant | None:
+        """Update with current gaze quadrant. Returns quadrant if dwell threshold met."""
+        if quadrant is None:
+            self._current_quadrant = None
+            return None
+
+        if quadrant != self._current_quadrant:
+            self._current_quadrant = quadrant
+            self._dwell_start_ms = timestamp_ms
+            return None
+
+        elapsed = timestamp_ms - self._dwell_start_ms
+        if elapsed >= self._dwell_time_ms and quadrant != self._last_activated:
+            self._last_activated = quadrant
+            return quadrant
+
+        return None
+
+
+def _get_iris_center(landmarks) -> tuple[float, float] | None:
+    """Extract averaged iris center from both eyes."""
+    try:
+        left = landmarks[LEFT_IRIS_CENTER]
+        right = landmarks[RIGHT_IRIS_CENTER]
+        return ((left.x + right.x) / 2, (left.y + right.y) / 2)
+    except (IndexError, AttributeError):
+        return None
+
+
+class EyeTracker:
+    """Captures webcam feed and tracks iris position using MediaPipe."""
+
+    def __init__(
+        self,
+        state: SharedState,
+        calibration: CalibrationData,
+        dwell_time_ms: int = 400,
+        webcam_index: int = 0,
+    ):
+        self._state = state
+        self._calibration = calibration
+        self._dwell = DwellTracker(dwell_time_ms=dwell_time_ms)
+        self._webcam_index = webcam_index
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(target=self._track_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def _track_loop(self) -> None:
+        cap = cv2.VideoCapture(self._webcam_index)
+        if not cap.isOpened():
+            logger.error("Cannot open webcam %d", self._webcam_index)
+            return
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        mp_face_mesh = mp.solutions.face_mesh
+
+        with mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as face_mesh:
+            while self._running:
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+
+                frame = cv2.flip(frame, 1)  # Mirror for natural feel
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = face_mesh.process(rgb)
+
+                gaze = None
+                if results.multi_face_landmarks:
+                    landmarks = results.multi_face_landmarks[0].landmark
+                    gaze = _get_iris_center(landmarks)
+
+                timestamp_ms = time.monotonic() * 1000
+                quadrant = None
+                if gaze and self._calibration.points:
+                    quadrant = map_gaze_to_quadrant(gaze, self._calibration)
+
+                activated = self._dwell.update(quadrant, timestamp_ms)
+                if activated:
+                    self._state.active_quadrant = activated
+
+        cap.release()
