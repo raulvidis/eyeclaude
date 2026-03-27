@@ -120,10 +120,9 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         iris_x = (l_iris.x + r_iris.x) / 2
 
-        # X: iris offset from nose (amplified, negated). Negated because
-        # cv2.flip mirrors the frame — looking right moves iris right in
-        # the flipped image but should decrease gaze_x (screen-left = 0).
-        offset_x = -(iris_x - nose.x)
+        # X: iris offset from nose (amplified). No inversion here —
+        # the calibration bounds handle axis direction naturally.
+        offset_x = iris_x - nose.x
         amp_x = 8.0
         gaze_x = nose.x + offset_x * amp_x
 

@@ -375,11 +375,10 @@ class CalibrationOverlay:
         screen_h = self._screen_h
 
         if not self._bounds_done:
-            # Before calibration, rough mapping. Both axes are inverted:
-            # flipped webcam + amplified iris offset = looking-left gives higher X,
-            # looking-up gives higher Y.
-            sx = int((1.0 - gaze_x) * screen_w)
-            sy = int((1.0 - gaze_y) * screen_h)
+            # Before calibration, rough direct mapping. The dot may move in
+            # the wrong direction — that's OK, calibration fixes it.
+            sx = int(gaze_x * screen_w)
+            sy = int(gaze_y * screen_h)
         else:
             # Bounds are recorded as raw gaze values when looking at each edge.
             # The mapping is: left_bound → screen 0, right_bound → screen 1.
