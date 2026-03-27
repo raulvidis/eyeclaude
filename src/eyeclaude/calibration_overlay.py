@@ -61,43 +61,55 @@ class CalibrationState:
         return result
 
 
-class CalibrationOverlay:
-    """Full-screen Tkinter overlay for visual calibration.
+# Bounds calibration steps in order
+BOUND_STEPS = ["left", "right", "top", "bottom"]
+BOUND_LABELS = {
+    "left": "Look at the LEFT edge of your screen, then press SPACE",
+    "right": "Look at the RIGHT edge of your screen, then press SPACE",
+    "top": "Look at the TOP edge of your screen, then press SPACE",
+    "bottom": "Look at the BOTTOM edge of your screen, then press SPACE",
+}
+BOUND_DONE_MSG = "Bounds calibrated! Move your eyes around to test. Press ESC when done."
 
-    Shows discovered terminal positions as clickable rectangles with a live
-    gaze pointer. User clicks a terminal, presses Start to record, moves
-    eyes around the terminal, presses End to stop. Rectangles update in
-    real-time if windows are moved.
+
+class CalibrationOverlay:
+    """Full-screen Tkinter overlay for bounds-based gaze calibration.
+
+    Step 1: User looks at left/right/top/bottom screen edges to set gaze bounds.
+    Step 2: Gaze is linearly mapped from those bounds to full screen.
+    Terminal rectangles are shown as visual reference throughout.
     """
 
-    GAZE_DOT_RADIUS = 10
+    GAZE_DOT_RADIUS = 12
     BG_OPACITY = 0.7
-    POLL_INTERVAL_MS = 100  # Window position polling
-    GAZE_INTERVAL_MS = 33   # ~30fps gaze updates
+    POLL_INTERVAL_MS = 100
+    GAZE_INTERVAL_MS = 33
 
     def __init__(self, webcam_index: int = 0):
         self._webcam_index = webcam_index
-        self._state = CalibrationState()
         self._terminal_rects: list[TerminalRect] = []
-        self._calibration_results: dict[int, tuple[float, float]] = {}  # hwnd -> (median_x, median_y)
-        self._gaze_pos: tuple[float, float] | None = None  # Raw iris position (0-1) for dot
-        self._gaze_calibration_pos: tuple[float, float] | None = None  # Amplified pos for calibration
-        self._camera_error: str | None = None  # Surfaced to UI
         self._running = False
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
         self._gaze_dot_id: int | None = None
         self._status_label_id: int | None = None
-        self._rect_ids: dict[int, int] = {}  # hwnd -> canvas rect id
-        self._label_ids: dict[int, int] = {}  # hwnd -> canvas label id
-        self._check_ids: dict[int, int] = {}  # hwnd -> canvas checkmark id
+        self._rect_ids: dict[int, int] = {}
+        self._label_ids: dict[int, int] = {}
 
-        # Gaze tracking thread
+        # Gaze tracking
         self._gaze_thread: threading.Thread | None = None
         self._gaze_lock = threading.Lock()
-        # Webcam + landmarker opened on main thread, read from gaze thread
+        self._raw_gaze: tuple[float, float] | None = None  # Raw _get_iris_center output
+        self._camera_error: str | None = None
         self._cap = None
         self._landmarker = None
+
+        # Bounds calibration
+        self._bound_step_index: int = 0  # Which bound we're capturing next
+        self._bounds: dict[str, float] = {}  # "left" -> gaze_x, "right" -> gaze_x, etc.
+        self._bounds_done: bool = False
+        self._collecting_samples: list[tuple[float, float]] = []
+        self._collecting: bool = False
 
     def run(self) -> CalibrationData | None:
         """Open the overlay, run calibration, return results. Blocks until closed."""
@@ -106,7 +118,6 @@ class CalibrationOverlay:
 
         self._running = True
 
-        # Discover terminals
         discovered = discover_terminals()
         if not discovered:
             logger.warning("No terminal windows found")
@@ -120,8 +131,7 @@ class CalibrationOverlay:
             for i, t in enumerate(discovered)
         ]
 
-        # Open webcam on main thread — Windows DirectShow/MSMF backends
-        # can fail to read frames when opened from a non-main thread.
+        # Open webcam on main thread (Windows DirectShow requirement)
         try:
             model_path = ensure_model()
         except Exception as e:
@@ -150,7 +160,6 @@ class CalibrationOverlay:
             self._cap.release()
             return None
 
-        # Verify we can actually read a frame
         ret, _ = self._cap.read()
         if not ret:
             logger.error("Webcam opened but cannot read frames")
@@ -158,21 +167,17 @@ class CalibrationOverlay:
             self._cap.release()
             return None
 
-        # Start gaze tracking thread (webcam already open)
         self._gaze_thread = threading.Thread(target=self._gaze_loop, daemon=True)
         self._gaze_thread.start()
 
-        # Build and run Tkinter
         self._build_gui()
         self._root.mainloop()
 
-        # Cleanup
         self._running = False
-        time.sleep(0.1)  # Let gaze thread exit
+        time.sleep(0.1)
         self._landmarker.close()
         self._cap.release()
 
-        # Convert results to CalibrationData using quadrant assignment
         return self._build_calibration_data()
 
     def _build_gui(self) -> None:
@@ -192,14 +197,13 @@ class CalibrationOverlay:
         )
         self._canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Draw terminal rectangles
+        # Draw terminal rectangles as visual reference
         for tr in self._terminal_rects:
             rid = self._canvas.create_rectangle(
                 tr.left, tr.top, tr.right, tr.bottom,
                 outline="white", width=3, fill="",
             )
             self._rect_ids[tr.hwnd] = rid
-
             cx = (tr.left + tr.right) // 2
             cy = (tr.top + tr.bottom) // 2
             lid = self._canvas.create_text(
@@ -208,102 +212,170 @@ class CalibrationOverlay:
             )
             self._label_ids[tr.hwnd] = lid
 
-        # Instructions
-        self._canvas.create_text(
-            screen_w // 2, 30,
-            text="Click a terminal to select it · Press S to Start recording · Press E to End recording · ESC to finish",
-            fill="#aaaaaa", font=("Segoe UI", 12),
-        )
-
         # Status label
         self._status_label_id = self._canvas.create_text(
-            screen_w // 2, screen_h - 30,
-            text="Select a terminal to begin calibration",
-            fill="#ffcc00", font=("Segoe UI", 14),
+            screen_w // 2, screen_h - 40,
+            text=BOUND_LABELS[BOUND_STEPS[0]],
+            fill="#ffcc00", font=("Segoe UI", 16, "bold"),
         )
 
-        # Gaze dot (starts hidden)
+        # Gaze dot
         self._gaze_dot_id = self._canvas.create_oval(
             -100, -100, -100, -100,
             fill="#00ff88", outline="white", width=2,
         )
 
-        # Bindings
-        self._canvas.bind("<Button-1>", self._on_click)
-        self._root.bind("<s>", self._on_start)
-        self._root.bind("<S>", self._on_start)
-        self._root.bind("<e>", self._on_end)
-        self._root.bind("<E>", self._on_end)
+        # Draw edge markers to show where to look
+        self._edge_marker_id = self._canvas.create_text(
+            50, screen_h // 2,
+            text="\u25b6", fill="#ff4444", font=("Segoe UI", 32, "bold"),
+        )
+
+        # Key bindings
+        self._root.bind("<space>", self._on_space)
         self._root.bind("<Escape>", self._on_escape)
 
-        # Start periodic updates
+        # Periodic updates
         self._root.after(self.POLL_INTERVAL_MS, self._poll_window_positions)
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
-    def _on_click(self, event) -> None:
-        x, y = event.x, event.y
-        for tr in self._terminal_rects:
-            if tr.contains(x, y):
-                self._state.select(tr.hwnd)
-                self._update_rect_styles()
-                self._set_status(f"Selected: {tr.label} — Press S to start recording")
-                return
-        # Clicked outside all rects
-        self._state.selected_hwnd = None
-        self._update_rect_styles()
-        self._set_status("Select a terminal to begin calibration")
-
-    def _on_start(self, event) -> None:
-        if self._state.selected_hwnd is None:
-            self._set_status("Select a terminal first!")
-            return
-        self._state.start_recording()
-        label = self._get_label_for_hwnd(self._state.selected_hwnd)
-        self._set_status(f"Recording {label}... look around the terminal area. Press E to stop.")
-        self._update_rect_styles()
-
-    def _on_end(self, event) -> None:
-        if not self._state.recording:
-            self._set_status("Not currently recording. Select a terminal and press S first.")
+    def _on_space(self, event) -> None:
+        if self._bounds_done:
             return
 
-        hwnd = self._state.selected_hwnd
-        samples = self._state.stop_recording()
-        label = self._get_label_for_hwnd(hwnd)
+        with self._gaze_lock:
+            gaze = self._raw_gaze
 
-        if len(samples) < 5:
-            self._set_status(f"Only {len(samples)} samples for {label} — not enough. Try again.")
-            self._state.calibrated_hwnds.discard(hwnd)
+        if gaze is None:
+            self._set_status("No face detected! Look at the camera.")
+            return
+
+        # Start collecting samples for this bound
+        if not self._collecting:
+            self._collecting = True
+            self._collecting_samples = []
+            self._set_status("Hold still... recording")
+            # Schedule sample collection for 1 second then finalize
+            self._root.after(1000, self._finalize_bound)
+            return
+
+    def _finalize_bound(self) -> None:
+        """Called after 1 second of sample collection."""
+        self._collecting = False
+        step = BOUND_STEPS[self._bound_step_index]
+
+        if len(self._collecting_samples) < 5:
+            self._set_status(f"Not enough samples. Try again: {BOUND_LABELS[step]}")
+            return
+
+        xs = [s[0] for s in self._collecting_samples]
+        ys = [s[1] for s in self._collecting_samples]
+
+        if step in ("left", "right"):
+            self._bounds[step] = float(np.median(xs))
         else:
-            xs = [s[0] for s in samples]
-            ys = [s[1] for s in samples]
-            median_x = float(np.median(xs))
-            median_y = float(np.median(ys))
-            self._calibration_results[hwnd] = (median_x, median_y)
-            self._set_status(
-                f"{label} calibrated ({len(samples)} samples). "
-                f"Select another terminal or press ESC to finish."
-            )
+            self._bounds[step] = float(np.median(ys))
 
-        self._update_rect_styles()
+        self._bound_step_index += 1
+
+        if self._bound_step_index >= len(BOUND_STEPS):
+            self._bounds_done = True
+            self._set_status(BOUND_DONE_MSG)
+            self._update_edge_marker()
+        else:
+            next_step = BOUND_STEPS[self._bound_step_index]
+            self._set_status(BOUND_LABELS[next_step])
+            self._update_edge_marker()
+
+    def _update_edge_marker(self) -> None:
+        """Move the edge marker arrow to indicate where to look."""
+        if self._bounds_done:
+            self._canvas.delete(self._edge_marker_id)
+            return
+
+        screen_w = self._root.winfo_screenwidth()
+        screen_h = self._root.winfo_screenheight()
+        step = BOUND_STEPS[self._bound_step_index]
+
+        positions = {
+            "left": (30, screen_h // 2, "\u25c0"),       # ◀
+            "right": (screen_w - 30, screen_h // 2, "\u25b6"),  # ▶
+            "top": (screen_w // 2, 60, "\u25b2"),         # ▲
+            "bottom": (screen_w // 2, screen_h - 70, "\u25bc"),  # ▼
+        }
+        x, y, arrow = positions[step]
+        self._canvas.coords(self._edge_marker_id, x, y)
+        self._canvas.itemconfig(self._edge_marker_id, text=arrow)
 
     def _on_escape(self, event) -> None:
-        if self._state.recording:
-            self._state.stop_recording()
         self._running = False
         self._root.destroy()
+
+    def _map_gaze_to_screen(self, gaze_x: float, gaze_y: float) -> tuple[int, int]:
+        """Map raw gaze values to screen coordinates using calibrated bounds."""
+        screen_w = self._root.winfo_screenwidth()
+        screen_h = self._root.winfo_screenheight()
+
+        if not self._bounds_done:
+            # Before calibration, rough linear mapping
+            sx = int(gaze_x * screen_w)
+            sy = int(gaze_y * screen_h)
+        else:
+            bnd_left = self._bounds["left"]
+            bnd_right = self._bounds["right"]
+            bnd_top = self._bounds["top"]
+            bnd_bottom = self._bounds["bottom"]
+
+            # Linear interpolation: bound range → screen range
+            x_range = bnd_right - bnd_left
+            y_range = bnd_bottom - bnd_top
+            if abs(x_range) < 0.001:
+                x_range = 0.001
+            if abs(y_range) < 0.001:
+                y_range = 0.001
+
+            norm_x = (gaze_x - bnd_left) / x_range
+            norm_y = (gaze_y - bnd_top) / y_range
+            sx = int(norm_x * screen_w)
+            sy = int(norm_y * screen_h)
+
+        return (max(0, min(screen_w, sx)), max(0, min(screen_h, sy)))
+
+    def _update_gaze_dot(self) -> None:
+        """Move the gaze dot to the current gaze position."""
+        if not self._running:
+            return
+
+        with self._gaze_lock:
+            gaze = self._raw_gaze
+            cam_err = self._camera_error
+
+        if cam_err:
+            self._set_status(f"Camera error: {cam_err}")
+            self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
+            return
+
+        if gaze and self._gaze_dot_id:
+            sx, sy = self._map_gaze_to_screen(gaze[0], gaze[1])
+            r = self.GAZE_DOT_RADIUS
+            self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
+            self._canvas.tag_raise(self._gaze_dot_id)
+
+            # Collect samples during bound calibration
+            if self._collecting:
+                self._collecting_samples.append(gaze)
+
+        self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
     def _poll_window_positions(self) -> None:
         """Update terminal rectangle positions in real-time."""
         if not self._running:
             return
 
-        # Check for new terminals
         current_hwnds = {tr.hwnd for tr in self._terminal_rects}
         discovered = discover_terminals()
         discovered_hwnds = {t.hwnd for t in discovered}
 
-        # Add new terminals
         for t in discovered:
             if t.hwnd not in current_hwnds:
                 idx = len(self._terminal_rects) + 1
@@ -325,7 +397,6 @@ class CalibrationOverlay:
                 )
                 self._label_ids[tr.hwnd] = lid
 
-        # Remove closed terminals
         for tr in list(self._terminal_rects):
             if tr.hwnd not in discovered_hwnds:
                 self._terminal_rects.remove(tr)
@@ -333,10 +404,7 @@ class CalibrationOverlay:
                     self._canvas.delete(self._rect_ids.pop(tr.hwnd))
                 if tr.hwnd in self._label_ids:
                     self._canvas.delete(self._label_ids.pop(tr.hwnd))
-                if tr.hwnd in self._check_ids:
-                    self._canvas.delete(self._check_ids.pop(tr.hwnd))
 
-        # Update positions of existing terminals
         for tr in self._terminal_rects:
             rect = get_window_rect(tr.hwnd)
             if rect:
@@ -352,41 +420,6 @@ class CalibrationOverlay:
                     self._canvas.coords(self._label_ids[tr.hwnd], cx, cy)
 
         self._root.after(self.POLL_INTERVAL_MS, self._poll_window_positions)
-
-    def _update_gaze_dot(self) -> None:
-        """Move the gaze dot to the current gaze position."""
-        if not self._running:
-            return
-
-        with self._gaze_lock:
-            dot_pos = self._gaze_pos  # Raw iris (0-1) for visual dot
-            cal_pos = self._gaze_calibration_pos  # Amplified for calibration samples
-            cam_err = self._camera_error
-
-        # Show camera errors in the status bar
-        if cam_err:
-            self._set_status(f"Camera error: {cam_err}")
-            self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
-            return
-
-        if dot_pos and self._gaze_dot_id:
-            screen_w = self._root.winfo_screenwidth()
-            screen_h = self._root.winfo_screenheight()
-            # Raw iris x/y from MediaPipe are in [0,1] image-space.
-            # Frame is already flipped (cv2.flip(frame, 1)) so x maps directly.
-            sx = int(dot_pos[0] * screen_w)
-            sy = int(dot_pos[1] * screen_h)
-            sx = max(0, min(screen_w, sx))
-            sy = max(0, min(screen_h, sy))
-            r = self.GAZE_DOT_RADIUS
-            self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
-            self._canvas.tag_raise(self._gaze_dot_id)
-
-            # Record amplified gaze values for calibration (what the eye tracker uses)
-            if self._state.recording and cal_pos:
-                self._state.add_sample(cal_pos[0], cal_pos[1])
-
-        self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
     def _gaze_loop(self) -> None:
         """Background thread: read frames from pre-opened webcam and compute gaze."""
@@ -409,36 +442,12 @@ class CalibrationOverlay:
                 result = landmarker.detect(mp_image)
 
                 if result.face_landmarks:
-                    landmarks = result.face_landmarks[0]
-                    # Blended gaze for the visual dot: nose (head) + iris offset (eyes)
-                    # Uses moderate amplification so both head turns and eye
-                    # movements contribute to the dot position.
-                    try:
-                        nose = landmarks[1]
-                        l_iris = landmarks[LEFT_IRIS_CENTER]
-                        r_iris = landmarks[RIGHT_IRIS_CENTER]
-                        iris_x = (l_iris.x + r_iris.x) / 2
-                        iris_y = (l_iris.y + r_iris.y) / 2
-                        offset_x = iris_x - nose.x
-                        offset_y = iris_y - nose.y
-                        # Moderate amplification for the dot (less than the 8x/12x
-                        # used for calibration — just enough to be responsive)
-                        dot_x = nose.x + offset_x * 3.0
-                        dot_y = nose.y + offset_y * 4.0
-                        dot_pos = (dot_x, dot_y)
-                    except (IndexError, AttributeError):
-                        dot_pos = None
-
-                    # Amplified gaze for calibration recording
-                    cal_pos = _get_iris_center(landmarks)
-
+                    gaze = _get_iris_center(result.face_landmarks[0])
                     with self._gaze_lock:
-                        self._gaze_pos = dot_pos
-                        self._gaze_calibration_pos = cal_pos
+                        self._raw_gaze = gaze
                 else:
                     with self._gaze_lock:
-                        self._gaze_pos = None
-                        self._gaze_calibration_pos = None
+                        self._raw_gaze = None
 
                 time.sleep(0.03)
         except Exception as e:
@@ -446,58 +455,44 @@ class CalibrationOverlay:
             with self._gaze_lock:
                 self._camera_error = f"Tracking error: {e}"
 
-    def _update_rect_styles(self) -> None:
-        """Update rectangle colors based on selection/recording/calibrated state."""
-        for tr in self._terminal_rects:
-            rid = self._rect_ids.get(tr.hwnd)
-            if not rid:
-                continue
-
-            if tr.hwnd in self._state.calibrated_hwnds:
-                self._canvas.itemconfig(rid, outline="#00ff00", width=4)
-                # Add checkmark if not already present
-                if tr.hwnd not in self._check_ids:
-                    cx = (tr.left + tr.right) // 2
-                    cy = tr.top + 30
-                    cid = self._canvas.create_text(
-                        cx, cy, text="\u2713", fill="#00ff00",
-                        font=("Segoe UI", 24, "bold"),
-                    )
-                    self._check_ids[tr.hwnd] = cid
-            elif tr.hwnd == self._state.selected_hwnd:
-                if self._state.recording:
-                    self._canvas.itemconfig(rid, outline="#ff4444", width=4)
-                else:
-                    self._canvas.itemconfig(rid, outline="#ffcc00", width=4)
-            else:
-                self._canvas.itemconfig(rid, outline="white", width=3)
-
-    def _set_status(self, text: str) -> None:
-        if self._status_label_id and self._canvas:
-            self._canvas.itemconfig(self._status_label_id, text=text)
-
-    def _get_label_for_hwnd(self, hwnd: int | None) -> str:
-        if hwnd is None:
-            return "Unknown"
-        for tr in self._terminal_rects:
-            if tr.hwnd == hwnd:
-                return tr.label
-        return f"HWND={hwnd}"
-
     def _build_calibration_data(self) -> CalibrationData | None:
-        """Convert per-HWND calibration results to quadrant-based CalibrationData."""
+        """Build CalibrationData from bounds calibration.
+
+        Maps each terminal's screen center to gaze space using the calibrated
+        bounds, producing the same quadrant-based CalibrationData the eye
+        tracker expects.
+        """
         from eyeclaude.pipe_server import _assign_quadrant_by_position
 
-        if not self._calibration_results:
+        if not self._bounds_done:
             return None
 
+        bnd_left = self._bounds["left"]
+        bnd_right = self._bounds["right"]
+        bnd_top = self._bounds["top"]
+        bnd_bottom = self._bounds["bottom"]
+
+        x_range = bnd_right - bnd_left
+        y_range = bnd_bottom - bnd_top
+        if abs(x_range) < 0.001 or abs(y_range) < 0.001:
+            logger.warning("Calibration bounds too narrow")
+            return None
+
+        screen_w = self._root.winfo_screenwidth() if self._root else 1920
+        screen_h = self._root.winfo_screenheight() if self._root else 1080
+
         data = CalibrationData()
-        for hwnd, (mx, my) in self._calibration_results.items():
-            quadrant = _assign_quadrant_by_position(hwnd)
-            data.points[quadrant] = (mx, my)
+        for tr in self._terminal_rects:
+            quadrant = _assign_quadrant_by_position(tr.hwnd)
+            # Map terminal center (screen coords) back to gaze space
+            cx = (tr.left + tr.right) / 2
+            cy = (tr.top + tr.bottom) / 2
+            gaze_x = bnd_left + (cx / screen_w) * x_range
+            gaze_y = bnd_top + (cy / screen_h) * y_range
+            data.points[quadrant] = (gaze_x, gaze_y)
 
         if len(data.points) < 2:
-            logger.warning("Only %d quadrants calibrated — need at least 2", len(data.points))
+            logger.warning("Only %d quadrants — need at least 2", len(data.points))
             return None
 
         return data
