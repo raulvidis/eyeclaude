@@ -4,6 +4,7 @@ import json
 import os
 import sys
 
+import win32console
 import win32file
 
 
@@ -21,7 +22,10 @@ def main():
         sys.exit(1)
 
     state = sys.argv[2]
-    pid = os.getpid()
+    # Use console window handle as stable identifier — all processes in
+    # the same terminal share the same HWND, unlike PID which changes
+    # per hook invocation.
+    hwnd = win32console.GetConsoleWindow()
 
     # Read stdin for hook input (Claude Code sends JSON)
     stdin_data = ""
@@ -43,7 +47,7 @@ def main():
 
     message = json.dumps({
         "type": "status",
-        "pid": pid,
+        "window_handle": hwnd,
         "state": state,
     }).encode("utf-8")
 

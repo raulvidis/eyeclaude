@@ -176,21 +176,20 @@ class Overlay:
         win32gui.FillRect(hdc, rect, brush)
         win32gui.DeleteObject(brush)
 
-        # Draw borders for registered terminals
+        # Draw borders for all registered terminals
         old_brush = win32gui.SelectObject(hdc, win32gui.GetStockObject(NULL_BRUSH))
 
         active_quadrant = self._state.active_quadrant
         terminals = self._state.get_all_terminals()
 
         for terminal in terminals:
-            if terminal.quadrant != active_quadrant:
-                continue
-
             x, y, w, h = compute_quadrant_rect(terminal.quadrant, screen_w, screen_h)
             color = _status_to_color(
                 terminal.status, self._border_colors, self._pulse_phase
             )
-            pen = win32gui.CreatePen(PS_INSIDEFRAME, self._border_thickness, color)
+            # Active quadrant gets full thickness, inactive gets thinner border
+            thickness = self._border_thickness if terminal.quadrant == active_quadrant else max(1, self._border_thickness // 2)
+            pen = win32gui.CreatePen(PS_INSIDEFRAME, thickness, color)
             old_pen = win32gui.SelectObject(hdc, pen)
             win32gui.Rectangle(hdc, x, y, x + w, y + h)
             win32gui.SelectObject(hdc, old_pen)

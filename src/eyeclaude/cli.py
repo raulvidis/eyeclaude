@@ -60,8 +60,14 @@ def start():
             from eyeclaude.shared_state import InstanceStatus
             status_map = {"idle": InstanceStatus.IDLE, "working": InstanceStatus.WORKING,
                           "finished": InstanceStatus.FINISHED, "error": InstanceStatus.ERROR}
-            status = status_map.get(msg.state, InstanceStatus.IDLE)
-            status_monitor.on_status_change(pid=msg.pid, new_status=status)
+            new_status = status_map.get(msg.state, InstanceStatus.IDLE)
+            # Resolve the pid from window_handle for the status monitor
+            if msg.window_handle:
+                terminal = state.get_terminal_by_hwnd(msg.window_handle)
+                if terminal:
+                    status_monitor.on_status_change(pid=terminal.pid, new_status=new_status)
+            else:
+                status_monitor.on_status_change(pid=msg.pid, new_status=new_status)
 
     pipe_server.handle_message = handle_with_monitor
 
@@ -97,7 +103,7 @@ def start():
 
     # Main loop: update focus + status monitor tick
     try:
-        while not stop_event.is_set():
+        while not stop_event.is_set() and not state.shutdown_requested:
             active = state.active_quadrant
             window_manager.update_focus(active)
             status_monitor.tick()
@@ -214,15 +220,20 @@ def register():
 
 @main.command()
 def unregister():
-    """Unregister the current terminal from EyeClaude."""
+    """Unregister the current terminal from EyeClaude and remove hooks."""
     import os
+    import win32console
 
+    hwnd = win32console.GetConsoleWindow()
     pid = os.getpid()
     try:
         _send_pipe_message({"type": "unregister", "pid": pid})
         click.echo(f"Unregistered from EyeClaude (pid={pid})")
     except Exception as e:
         click.echo(f"Failed to unregister: {e}. Is EyeClaude running?")
+
+    _remove_claude_hooks()
+    click.echo("Claude Code status hooks removed.")
 
 
 def _send_pipe_message(data: dict) -> None:
@@ -241,61 +252,66 @@ def _send_pipe_message(data: dict) -> None:
         win32file.CloseHandle(handle)
 
 
-def _install_claude_hooks():
-    """Write Claude Code hooks to .claude/settings.local.json for status reporting."""
+EYECLAUDE_HOOKS = {
+    "PreToolUse": {"type": "command", "command": "eyeclaude-hooks status working"},
+    "Stop": {"type": "command", "command": "eyeclaude-hooks status finished"},
+    "StopFailure": {"type": "command", "command": "eyeclaude-hooks status error"},
+    "UserPromptSubmit": {"type": "command", "command": "eyeclaude-hooks status idle"},
+}
+
+
+def _load_settings() -> tuple[Path, dict]:
     settings_dir = Path(".claude")
     settings_dir.mkdir(exist_ok=True)
     settings_path = settings_dir / "settings.local.json"
-
     settings = {}
     if settings_path.exists():
         try:
             settings = json.loads(settings_path.read_text())
         except json.JSONDecodeError:
             settings = {}
+    return settings_path, settings
 
-    settings["hooks"] = {
-        "PreToolUse": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "eyeclaude-hooks status working",
-                    }
-                ]
-            }
-        ],
-        "Stop": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "eyeclaude-hooks status finished",
-                    }
-                ]
-            }
-        ],
-        "StopFailure": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "eyeclaude-hooks status error",
-                    }
-                ]
-            }
-        ],
-        "UserPromptSubmit": [
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "eyeclaude-hooks status idle",
-                    }
-                ]
-            }
-        ],
-    }
+
+def _install_claude_hooks():
+    """Merge EyeClaude hooks into .claude/settings.local.json without overwriting existing hooks."""
+    settings_path, settings = _load_settings()
+
+    if "hooks" not in settings:
+        settings["hooks"] = {}
+
+    for event_name, hook_def in EYECLAUDE_HOOKS.items():
+        if event_name not in settings["hooks"]:
+            settings["hooks"][event_name] = []
+        # Check if our hook is already installed
+        already_installed = any(
+            any(h.get("command") == hook_def["command"] for h in entry.get("hooks", []))
+            for entry in settings["hooks"][event_name]
+        )
+        if not already_installed:
+            settings["hooks"][event_name].append({"hooks": [hook_def]})
+
+    settings_path.write_text(json.dumps(settings, indent=2))
+
+
+def _remove_claude_hooks():
+    """Remove EyeClaude hooks from .claude/settings.local.json."""
+    settings_path, settings = _load_settings()
+
+    if "hooks" not in settings:
+        return
+
+    for event_name, hook_def in EYECLAUDE_HOOKS.items():
+        if event_name in settings["hooks"]:
+            settings["hooks"][event_name] = [
+                entry for entry in settings["hooks"][event_name]
+                if not any(h.get("command") == hook_def["command"] for h in entry.get("hooks", []))
+            ]
+            if not settings["hooks"][event_name]:
+                del settings["hooks"][event_name]
+
+    if not settings["hooks"]:
+        del settings["hooks"]
 
     settings_path.write_text(json.dumps(settings, indent=2))
 

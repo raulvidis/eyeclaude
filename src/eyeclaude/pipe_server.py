@@ -2,7 +2,6 @@
 
 import json
 import logging
-import struct
 import threading
 from dataclasses import dataclass
 
@@ -123,12 +122,26 @@ class PipeServer:
 
         elif msg.type == "status":
             status = STATUS_MAP.get(msg.state, InstanceStatus.IDLE)
-            self._state.update_status(
-                pid=msg.pid,
-                status=status,
-                error_message=msg.message,
-            )
-            logger.debug(f"Status update pid={msg.pid} -> {msg.state}")
+            # Status updates from hooks use window_handle (HWND) as identifier
+            # since each hook invocation spawns a new process with a different PID
+            if msg.window_handle:
+                self._state.update_status_by_hwnd(
+                    window_handle=msg.window_handle,
+                    status=status,
+                    error_message=msg.message,
+                )
+                logger.debug(f"Status update hwnd={msg.window_handle} -> {msg.state}")
+            else:
+                self._state.update_status(
+                    pid=msg.pid,
+                    status=status,
+                    error_message=msg.message,
+                )
+                logger.debug(f"Status update pid={msg.pid} -> {msg.state}")
+
+        elif msg.type == "shutdown":
+            self._state.request_shutdown()
+            logger.info("Shutdown requested via pipe")
 
     def _listen_loop(self) -> None:
         while self._running:

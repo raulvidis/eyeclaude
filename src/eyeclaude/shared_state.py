@@ -33,6 +33,7 @@ class SharedState:
         self._lock = threading.Lock()
         self._terminals: dict[int, TerminalInfo] = {}
         self._active_quadrant: Quadrant | None = None
+        self._shutdown_requested = threading.Event()
 
     @property
     def active_quadrant(self) -> Quadrant | None:
@@ -59,6 +60,34 @@ class SharedState:
             if pid in self._terminals:
                 self._terminals[pid].status = status
                 self._terminals[pid].error_message = error_message
+
+    def update_status_by_hwnd(self, window_handle: int, status: InstanceStatus, error_message: str = "") -> None:
+        with self._lock:
+            for info in self._terminals.values():
+                if info.window_handle == window_handle:
+                    info.status = status
+                    info.error_message = error_message
+                    return
+
+    def get_terminal_by_hwnd(self, window_handle: int) -> TerminalInfo | None:
+        with self._lock:
+            for info in self._terminals.values():
+                if info.window_handle == window_handle:
+                    return TerminalInfo(
+                        pid=info.pid,
+                        window_handle=info.window_handle,
+                        quadrant=info.quadrant,
+                        status=info.status,
+                        error_message=info.error_message,
+                    )
+            return None
+
+    def request_shutdown(self) -> None:
+        self._shutdown_requested.set()
+
+    @property
+    def shutdown_requested(self) -> bool:
+        return self._shutdown_requested.is_set()
 
     def get_terminal(self, pid: int) -> TerminalInfo | None:
         with self._lock:
