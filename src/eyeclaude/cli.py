@@ -19,7 +19,6 @@ from eyeclaude.eye_tracker import EyeTracker
 from eyeclaude.pipe_server import PipeServer, PIPE_NAME, _assign_quadrant_by_position
 from eyeclaude.shared_state import SharedState, InstanceStatus
 from eyeclaude.status_monitor import StatusMonitor
-from eyeclaude.overlay import Overlay
 from eyeclaude.window_manager import WindowManager
 
 logger = logging.getLogger("eyeclaude")
@@ -158,6 +157,8 @@ def start():
 
     save_calibration(calibration)
     click.echo(f"Calibration saved — {len(calibration.points)} quadrants.")
+    for q, (gx, gy) in calibration.points.items():
+        click.echo(f"  {q.value}: gaze=({gx:.4f}, {gy:.4f})")
 
     # Brief pause to let webcam fully release from calibration overlay
     time.sleep(0.5)
@@ -170,11 +171,10 @@ def start():
         webcam_index=config.webcam_index,
     )
     window_manager = WindowManager(state)
-    overlay = Overlay(state=state)
     eye_tracker.start()
-    overlay.start()
 
     click.echo("EyeClaude started. Press Ctrl+C to stop.")
+    click.echo("Watching for focus changes...")
 
     stop_event = threading.Event()
 
@@ -185,12 +185,24 @@ def start():
     signal.signal(signal.SIGTERM, handle_signal)
 
     # Main loop
+    last_active = None
     try:
         while not stop_event.is_set() and not state.shutdown_requested:
             active = state.active_quadrant
+            if active != last_active:
+                if active:
+                    terminal = state.get_terminal_for_quadrant(active)
+                    title = ""
+                    if terminal:
+                        try:
+                            import win32gui
+                            title = win32gui.GetWindowText(terminal.window_handle)
+                        except Exception:
+                            pass
+                    click.echo(f"  Focus → {active.value} {title}")
+                last_active = active
             window_manager.update_focus(active)
             status_monitor.tick()
-            overlay.update()
             _update_active_status_files(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
@@ -198,7 +210,6 @@ def start():
 
     click.echo("\nShutting down...")
     eye_tracker.stop()
-    overlay.stop()
     pipe_server.stop()
     _cleanup_status_files()
     click.echo("EyeClaude stopped.")
