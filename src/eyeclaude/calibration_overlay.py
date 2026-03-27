@@ -410,21 +410,30 @@ class CalibrationOverlay:
 
                 if result.face_landmarks:
                     landmarks = result.face_landmarks[0]
-                    # Raw iris position for the visual dot (0-1 image space)
+                    # Blended gaze for the visual dot: nose (head) + iris offset (eyes)
+                    # Uses moderate amplification so both head turns and eye
+                    # movements contribute to the dot position.
                     try:
+                        nose = landmarks[1]
                         l_iris = landmarks[LEFT_IRIS_CENTER]
                         r_iris = landmarks[RIGHT_IRIS_CENTER]
-                        raw_x = (l_iris.x + r_iris.x) / 2
-                        raw_y = (l_iris.y + r_iris.y) / 2
-                        raw_pos = (raw_x, raw_y)
+                        iris_x = (l_iris.x + r_iris.x) / 2
+                        iris_y = (l_iris.y + r_iris.y) / 2
+                        offset_x = iris_x - nose.x
+                        offset_y = iris_y - nose.y
+                        # Moderate amplification for the dot (less than the 8x/12x
+                        # used for calibration — just enough to be responsive)
+                        dot_x = nose.x + offset_x * 3.0
+                        dot_y = nose.y + offset_y * 4.0
+                        dot_pos = (dot_x, dot_y)
                     except (IndexError, AttributeError):
-                        raw_pos = None
+                        dot_pos = None
 
                     # Amplified gaze for calibration recording
                     cal_pos = _get_iris_center(landmarks)
 
                     with self._gaze_lock:
-                        self._gaze_pos = raw_pos
+                        self._gaze_pos = dot_pos
                         self._gaze_calibration_pos = cal_pos
                 else:
                     with self._gaze_lock:
