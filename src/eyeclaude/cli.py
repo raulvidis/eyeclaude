@@ -187,11 +187,9 @@ def config_cmd(dwell_time, border_thickness, webcam_index):
 
 @main.command()
 @click.option("--all", "register_all", is_flag=True, help="Register all visible Windows Terminal windows")
-@click.option("--pick", "pick_mode", is_flag=True, help="Interactively pick which terminals to register")
-def register(register_all, pick_mode):
+@click.option("--hwnd", type=int, default=None, help="Register a specific window handle")
+def register(register_all, hwnd):
     """Register terminal(s) with EyeClaude and install Claude Code hooks."""
-    import win32api
-    import win32con
     import win32gui
 
     if register_all:
@@ -199,53 +197,16 @@ def register(register_all, pick_mode):
         if not terminals:
             click.echo("No Windows Terminal windows found.")
             return
-        for hwnd in terminals:
-            _register_one_window(hwnd)
-    elif pick_mode:
-        terminals = _find_all_terminal_windows()
-        if not terminals:
-            click.echo("No Windows Terminal windows found.")
-            return
-
-        screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        screen_h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-        mid_x, mid_y = screen_w // 2, screen_h // 2
-
-        click.echo("Available Windows Terminal windows:")
-        for i, hwnd in enumerate(terminals, 1):
-            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-            cx, cy = (left + right) // 2, (top + bottom) // 2
-            if cx < mid_x:
-                pos = "TOP-LEFT" if cy < mid_y else "BOTTOM-LEFT"
-            else:
-                pos = "TOP-RIGHT" if cy < mid_y else "BOTTOM-RIGHT"
-            click.echo(f"  {i}. HWND={hwnd} - {pos} ({left},{top})-({right},{bottom})")
-
-        choices = click.prompt(
-            "Enter numbers to register (comma-separated, e.g. 1,2,3)",
-            type=str,
-        )
-        for choice in choices.split(","):
-            try:
-                idx = int(choice.strip()) - 1
-                if 0 <= idx < len(terminals):
-                    _register_one_window(terminals[idx])
-                else:
-                    click.echo(f"Invalid choice: {choice.strip()}")
-            except ValueError:
-                click.echo(f"Invalid input: {choice.strip()}")
+        for h in terminals:
+            _register_one_window(h)
+    elif hwnd:
+        _register_one_window(hwnd)
     else:
-        # Flash the foreground window title briefly so the user can confirm
-        # which terminal is being registered
+        # Fallback: use foreground window
         hwnd = win32gui.GetForegroundWindow()
         if not hwnd:
             click.echo("Error: Could not determine terminal window handle.")
-            click.echo("Tip: Use 'eyeclaude register --pick' to choose terminals interactively.")
             return
-        cls = win32gui.GetClassName(hwnd)
-        if "CASCADIA" not in cls.upper() and "TERMINAL" not in cls.upper():
-            click.echo(f"Warning: Foreground window ({cls}) may not be a terminal.")
-            click.echo("Tip: Use 'eyeclaude register --pick' to choose terminals interactively.")
         _register_one_window(hwnd)
 
     _install_claude_hooks()
