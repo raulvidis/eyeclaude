@@ -112,16 +112,18 @@ def _run_terminal_calibration(
     """Calibrate by having the user look at each terminal naturally.
 
     For each quadrant:
-    1. Flash the terminal title to indicate which one to look at
+    1. Flash the terminal window so the user knows which one to look at
     2. Collect gaze samples for 3 seconds
-    3. Average the samples for that quadrant's calibration point
+    3. Median-average the samples for that quadrant's calibration point
     """
+    import win32con
     import win32gui
+    import winsound
 
     calibration = CalibrationData()
     sample_duration = 3.0  # seconds per quadrant
 
-    # Map quadrants to terminal HWNDs for title flashing
+    # Map quadrants to terminal HWNDs
     quadrant_hwnds = {}
     if terminals:
         for t in terminals:
@@ -129,24 +131,45 @@ def _run_terminal_calibration(
 
     print()
     print("=== EyeClaude Calibration ===")
-    print("Look naturally at each terminal window when prompted.")
-    print("Just look at it as you would when working — no need to stare at a specific spot.")
+    print("Each terminal will flash and come to the foreground.")
+    print("Look at it naturally as you would when working.")
+    print("You'll hear a beep when sampling starts for each terminal.")
     print()
 
     for quadrant in quadrants:
         label = QUADRANT_LABELS[quadrant]
         hwnd = quadrant_hwnds.get(quadrant)
 
-        # Flash the target terminal's title
+        # Save original title
         original_title = None
         if hwnd:
             try:
                 original_title = win32gui.GetWindowText(hwnd)
-                win32gui.SetWindowText(hwnd, f">>> LOOK HERE <<< ({label})")
             except Exception:
                 pass
 
-        print(f"Look at the {label} terminal now...")
+        # Bring the target terminal to the foreground so user can see it
+        if hwnd:
+            try:
+                win32gui.SetWindowText(hwnd, f"=== LOOK AT THIS WINDOW === ({label})")
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+                # Flash the window border to draw attention
+                win32gui.FlashWindowEx(hwnd, 2, 5, 100)  # FLASHW_ALL, 5 flashes, 100ms
+            except Exception:
+                pass
+
+        # Countdown
+        print(f"  {label}: bringing window to front...")
+        time.sleep(1.5)  # Give user time to see which window it is
+
+        # Beep to signal "start looking now"
+        try:
+            winsound.Beep(800, 200)
+        except Exception:
+            pass
+
+        print(f"  {label}: recording... look at it naturally")
 
         # Collect gaze samples
         samples_x = []
@@ -171,6 +194,12 @@ def _run_terminal_calibration(
 
             # Small sleep to avoid burning CPU
             time.sleep(0.03)
+
+        # Done beep (lower pitch)
+        try:
+            winsound.Beep(400, 150)
+        except Exception:
+            pass
 
         # Restore original title
         if hwnd and original_title is not None:
