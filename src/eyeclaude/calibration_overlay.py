@@ -70,7 +70,7 @@ BOUND_LABELS = {
     "top": "Look at the TOP edge of your screen, then press SPACE",
     "bottom": "Look at the BOTTOM edge of your screen, then press SPACE",
 }
-BOUND_DONE_MSG = "Bounds calibrated! Move your eyes around to test. Press ESC when done."
+BOUND_DONE_MSG = "Bounds calibrated! Move your eyes to test. R to recalibrate, ESC when done."
 
 
 class CalibrationOverlay:
@@ -85,6 +85,7 @@ class CalibrationOverlay:
     BG_OPACITY = 0.7
     POLL_INTERVAL_MS = 100
     GAZE_INTERVAL_MS = 33
+    SMOOTHING_FACTOR = 0.3  # 0 = no smoothing, 1 = no movement
 
     def __init__(self, webcam_index: int = 0):
         self._webcam_index = webcam_index
@@ -113,6 +114,14 @@ class CalibrationOverlay:
         self._collecting: bool = False
         self._x_inverted: bool = False
         self._y_inverted: bool = False
+
+        # Smoothing
+        self._smooth_x: float | None = None
+        self._smooth_y: float | None = None
+
+        # Cached screen dimensions (so we don't call winfo after destroy)
+        self._screen_w: int = 1920
+        self._screen_h: int = 1080
 
     def run(self) -> CalibrationData | None:
         """Open the overlay, run calibration, return results. Blocks until closed."""
@@ -193,6 +202,8 @@ class CalibrationOverlay:
 
         screen_w = self._root.winfo_screenwidth()
         screen_h = self._root.winfo_screenheight()
+        self._screen_w = screen_w
+        self._screen_h = screen_h
 
         self._canvas = tk.Canvas(
             self._root, width=screen_w, height=screen_h,
@@ -237,6 +248,8 @@ class CalibrationOverlay:
         # Key bindings — focus_force ensures keys work in fullscreen overlay
         self._root.focus_force()
         self._root.bind("<space>", self._on_space)
+        self._root.bind("<r>", self._on_recalibrate)
+        self._root.bind("<R>", self._on_recalibrate)
         self._root.bind("<Escape>", self._on_escape)
 
         # Periodic updates
@@ -313,8 +326,8 @@ class CalibrationOverlay:
             self._canvas.delete(self._edge_marker_id)
             return
 
-        screen_w = self._root.winfo_screenwidth()
-        screen_h = self._root.winfo_screenheight()
+        screen_w = self._screen_w
+        screen_h = self._screen_h
         step = BOUND_STEPS[self._bound_step_index]
 
         positions = {
@@ -332,14 +345,32 @@ class CalibrationOverlay:
         self._running = False
         self._root.destroy()
 
+    def _on_recalibrate(self, event) -> None:
+        """Reset calibration and start over from center."""
+        self._bound_step_index = 0
+        self._bounds = {}
+        self._bounds_done = False
+        self._collecting = False
+        self._x_inverted = False
+        self._y_inverted = False
+        self._smooth_x = None
+        self._smooth_y = None
+        # Re-create edge marker if it was deleted
+        screen_w, screen_h = self._screen_w, self._screen_h
+        self._edge_marker_id = self._canvas.create_text(
+            screen_w // 2, screen_h // 2,
+            text="\u25cf", fill="#ff4444", font=("Segoe UI", 32, "bold"),
+        )
+        self._set_status(BOUND_LABELS[BOUND_STEPS[0]])
+
     def _set_status(self, text: str) -> None:
         if self._status_label_id and self._canvas:
             self._canvas.itemconfig(self._status_label_id, text=text)
 
     def _map_gaze_to_screen(self, gaze_x: float, gaze_y: float) -> tuple[int, int]:
         """Map raw gaze values to screen coordinates using calibrated bounds."""
-        screen_w = self._root.winfo_screenwidth()
-        screen_h = self._root.winfo_screenheight()
+        screen_w = self._screen_w
+        screen_h = self._screen_h
 
         if not self._bounds_done:
             # Before calibration, rough mapping. X is inverted because the
@@ -352,12 +383,7 @@ class CalibrationOverlay:
             bnd_top = self._bounds["top"]
             bnd_bottom = self._bounds["bottom"]
 
-            # If axis is inverted, swap the bounds so the mapping is correct
-            if self._x_inverted:
-                bnd_left, bnd_right = bnd_right, bnd_left
-            if self._y_inverted:
-                bnd_top, bnd_bottom = bnd_bottom, bnd_top
-
+            # Normalize gaze into the recorded bound range
             x_range = bnd_right - bnd_left
             y_range = bnd_bottom - bnd_top
             if abs(x_range) < 0.001:
@@ -367,6 +393,14 @@ class CalibrationOverlay:
 
             norm_x = (gaze_x - bnd_left) / x_range
             norm_y = (gaze_y - bnd_top) / y_range
+
+            # If axis is inverted (looking left gives higher gaze value),
+            # flip the normalized value so screen-left = 0, screen-right = 1
+            if self._x_inverted:
+                norm_x = 1.0 - norm_x
+            if self._y_inverted:
+                norm_y = 1.0 - norm_y
+
             sx = int(norm_x * screen_w)
             sy = int(norm_y * screen_h)
 
@@ -388,8 +422,20 @@ class CalibrationOverlay:
 
         if gaze and self._gaze_dot_id:
             sx, sy = self._map_gaze_to_screen(gaze[0], gaze[1])
+
+            # Exponential moving average for smoothing
+            alpha = 1.0 - self.SMOOTHING_FACTOR
+            if self._smooth_x is None:
+                self._smooth_x = float(sx)
+                self._smooth_y = float(sy)
+            else:
+                self._smooth_x = alpha * sx + self.SMOOTHING_FACTOR * self._smooth_x
+                self._smooth_y = alpha * sy + self.SMOOTHING_FACTOR * self._smooth_y
+
+            dx = int(self._smooth_x)
+            dy = int(self._smooth_y)
             r = self.GAZE_DOT_RADIUS
-            self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
+            self._canvas.coords(self._gaze_dot_id, dx - r, dy - r, dx + r, dy + r)
             self._canvas.tag_raise(self._gaze_dot_id)
 
             # Collect samples during bound calibration
@@ -503,29 +549,33 @@ class CalibrationOverlay:
         bnd_top = self._bounds["top"]
         bnd_bottom = self._bounds["bottom"]
 
-        # Apply same inversion correction as _map_gaze_to_screen
-        if self._x_inverted:
-            bnd_left, bnd_right = bnd_right, bnd_left
-        if self._y_inverted:
-            bnd_top, bnd_bottom = bnd_bottom, bnd_top
-
         x_range = bnd_right - bnd_left
         y_range = bnd_bottom - bnd_top
         if abs(x_range) < 0.001 or abs(y_range) < 0.001:
             logger.warning("Calibration bounds too narrow")
             return None
 
-        screen_w = self._root.winfo_screenwidth() if self._root else 1920
-        screen_h = self._root.winfo_screenheight() if self._root else 1080
+        # Use cached screen dimensions (root may be destroyed by now)
+        screen_w = self._screen_w
+        screen_h = self._screen_h
 
         data = CalibrationData()
         for tr in self._terminal_rects:
             quadrant = _assign_quadrant_by_position(tr.hwnd)
-            # Map terminal center (screen coords) back to gaze space
+            # Map terminal center (screen coords) to normalized [0,1]
             cx = (tr.left + tr.right) / 2
             cy = (tr.top + tr.bottom) / 2
-            gaze_x = bnd_left + (cx / screen_w) * x_range
-            gaze_y = bnd_top + (cy / screen_h) * y_range
+            norm_x = cx / screen_w
+            norm_y = cy / screen_h
+
+            # Invert normalized value if axis is flipped, then map to gaze space
+            if self._x_inverted:
+                norm_x = 1.0 - norm_x
+            if self._y_inverted:
+                norm_y = 1.0 - norm_y
+
+            gaze_x = bnd_left + norm_x * x_range
+            gaze_y = bnd_top + norm_y * y_range
             data.points[quadrant] = (gaze_x, gaze_y)
 
         if len(data.points) < 2:
