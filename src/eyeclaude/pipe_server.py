@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 import win32api
 import win32file
@@ -80,9 +81,10 @@ STATUS_MAP = {
 
 
 class PipeServer:
-    def __init__(self, state: SharedState, pipe_name: str = PIPE_NAME):
+    def __init__(self, state: SharedState, pipe_name: str = PIPE_NAME, status_dir: Path | None = None):
         self._state = state
         self._pipe_name = pipe_name
+        self._status_dir = status_dir or (Path.home() / ".eyeclaude" / "status")
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -105,6 +107,18 @@ class PipeServer:
             win32file.CloseHandle(handle)
         except Exception:
             pass
+
+    def _write_status_file(self, window_handle: int, state: str) -> None:
+        """Write per-terminal status JSON for the statusline wrapper."""
+        self._status_dir.mkdir(parents=True, exist_ok=True)
+        terminal = self._state.get_terminal_by_hwnd(window_handle)
+        active = False
+        if terminal:
+            active_quad = self._state.active_quadrant
+            active = terminal.quadrant == active_quad
+        data = {"status": state, "active": active}
+        status_file = self._status_dir / f"{window_handle}.json"
+        status_file.write_text(json.dumps(data), encoding="utf-8")
 
     def handle_message(self, msg: PipeMessage) -> None:
         if msg.type == "register":
@@ -131,6 +145,7 @@ class PipeServer:
                     error_message=msg.message,
                 )
                 logger.debug(f"Status update hwnd={msg.window_handle} -> {msg.state}")
+                self._write_status_file(msg.window_handle, msg.state)
             else:
                 self._state.update_status(
                     pid=msg.pid,

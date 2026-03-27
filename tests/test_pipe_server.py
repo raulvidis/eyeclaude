@@ -79,3 +79,51 @@ class TestPipeServerMessageHandling:
         terminal = state.get_terminal(pid=200)
         assert terminal.status == InstanceStatus.ERROR
         assert terminal.error_message == "fail"
+
+
+class TestStatusFileWriter:
+    def test_writes_status_file_on_status_message(self, tmp_path):
+        from eyeclaude.pipe_server import PipeServer, PipeMessage
+        from eyeclaude.shared_state import SharedState, Quadrant
+
+        state = SharedState()
+        state.register_terminal(pid=1001, window_handle=1001, quadrant=Quadrant.TOP_LEFT)
+
+        server = PipeServer(state, status_dir=tmp_path)
+        msg = PipeMessage(type="status", window_handle=1001, state="working")
+        server.handle_message(msg)
+
+        status_file = tmp_path / "1001.json"
+        assert status_file.exists()
+        data = json.loads(status_file.read_text())
+        assert data["status"] == "working"
+
+    def test_writes_active_flag(self, tmp_path):
+        from eyeclaude.pipe_server import PipeServer, PipeMessage
+        from eyeclaude.shared_state import SharedState, Quadrant
+
+        state = SharedState()
+        state.register_terminal(pid=1001, window_handle=1001, quadrant=Quadrant.TOP_LEFT)
+        state.active_quadrant = Quadrant.TOP_LEFT
+
+        server = PipeServer(state, status_dir=tmp_path)
+        msg = PipeMessage(type="status", window_handle=1001, state="idle")
+        server.handle_message(msg)
+
+        data = json.loads((tmp_path / "1001.json").read_text())
+        assert data["active"] is True
+
+    def test_inactive_terminal(self, tmp_path):
+        from eyeclaude.pipe_server import PipeServer, PipeMessage
+        from eyeclaude.shared_state import SharedState, Quadrant
+
+        state = SharedState()
+        state.register_terminal(pid=1001, window_handle=1001, quadrant=Quadrant.TOP_LEFT)
+        state.active_quadrant = Quadrant.BOTTOM_RIGHT  # Different quadrant
+
+        server = PipeServer(state, status_dir=tmp_path)
+        msg = PipeMessage(type="status", window_handle=1001, state="idle")
+        server.handle_message(msg)
+
+        data = json.loads((tmp_path / "1001.json").read_text())
+        assert data["active"] is False
