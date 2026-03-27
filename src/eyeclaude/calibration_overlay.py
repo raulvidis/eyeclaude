@@ -61,9 +61,10 @@ class CalibrationState:
         return result
 
 
-# Bounds calibration steps in order
-BOUND_STEPS = ["left", "right", "top", "bottom"]
+# Bounds calibration steps — center first to establish baseline
+BOUND_STEPS = ["center", "left", "right", "top", "bottom"]
 BOUND_LABELS = {
+    "center": "Look at the CENTER of your screen, then press SPACE",
     "left": "Look at the LEFT edge of your screen, then press SPACE",
     "right": "Look at the RIGHT edge of your screen, then press SPACE",
     "top": "Look at the TOP edge of your screen, then press SPACE",
@@ -105,11 +106,13 @@ class CalibrationOverlay:
         self._landmarker = None
 
         # Bounds calibration
-        self._bound_step_index: int = 0  # Which bound we're capturing next
-        self._bounds: dict[str, float] = {}  # "left" -> gaze_x, "right" -> gaze_x, etc.
+        self._bound_step_index: int = 0
+        self._bounds: dict[str, float] = {}
         self._bounds_done: bool = False
         self._collecting_samples: list[tuple[float, float]] = []
         self._collecting: bool = False
+        self._x_inverted: bool = False
+        self._y_inverted: bool = False
 
     def run(self) -> CalibrationData | None:
         """Open the overlay, run calibration, return results. Blocks until closed."""
@@ -225,10 +228,10 @@ class CalibrationOverlay:
             fill="#00ff88", outline="white", width=2,
         )
 
-        # Draw edge markers to show where to look
+        # Edge marker — starts at center
         self._edge_marker_id = self._canvas.create_text(
-            50, screen_h // 2,
-            text="\u25b6", fill="#ff4444", font=("Segoe UI", 32, "bold"),
+            screen_w // 2, screen_h // 2,
+            text="\u25cf", fill="#ff4444", font=("Segoe UI", 32, "bold"),
         )
 
         # Key bindings
@@ -270,16 +273,27 @@ class CalibrationOverlay:
 
         xs = [s[0] for s in self._collecting_samples]
         ys = [s[1] for s in self._collecting_samples]
+        median_x = float(np.median(xs))
+        median_y = float(np.median(ys))
 
-        if step in ("left", "right"):
-            self._bounds[step] = float(np.median(xs))
-        else:
-            self._bounds[step] = float(np.median(ys))
+        if step == "center":
+            self._bounds["center_x"] = median_x
+            self._bounds["center_y"] = median_y
+        elif step in ("left", "right"):
+            self._bounds[step] = median_x
+        else:  # top, bottom
+            self._bounds[step] = median_y
 
         self._bound_step_index += 1
 
         if self._bound_step_index >= len(BOUND_STEPS):
             self._bounds_done = True
+            # Detect if axes are inverted by comparing to center
+            # If "left" gaze_x > center_x, then X axis is inverted
+            cx = self._bounds.get("center_x", 0.5)
+            cy = self._bounds.get("center_y", 0.5)
+            self._x_inverted = self._bounds.get("left", cx) > cx
+            self._y_inverted = self._bounds.get("top", cy) > cy
             self._set_status(BOUND_DONE_MSG)
             self._update_edge_marker()
         else:
@@ -298,10 +312,11 @@ class CalibrationOverlay:
         step = BOUND_STEPS[self._bound_step_index]
 
         positions = {
-            "left": (30, screen_h // 2, "\u25c0"),       # ◀
-            "right": (screen_w - 30, screen_h // 2, "\u25b6"),  # ▶
-            "top": (screen_w // 2, 60, "\u25b2"),         # ▲
-            "bottom": (screen_w // 2, screen_h - 70, "\u25bc"),  # ▼
+            "center": (screen_w // 2, screen_h // 2, "\u25cf"),  # ●
+            "left": (30, screen_h // 2, "\u25c0"),                # ◀
+            "right": (screen_w - 30, screen_h // 2, "\u25b6"),    # ▶
+            "top": (screen_w // 2, 60, "\u25b2"),                 # ▲
+            "bottom": (screen_w // 2, screen_h - 70, "\u25bc"),   # ▼
         }
         x, y, arrow = positions[step]
         self._canvas.coords(self._edge_marker_id, x, y)
@@ -317,7 +332,7 @@ class CalibrationOverlay:
         screen_h = self._root.winfo_screenheight()
 
         if not self._bounds_done:
-            # Before calibration, rough linear mapping
+            # Before calibration, rough mapping centered on screen
             sx = int(gaze_x * screen_w)
             sy = int(gaze_y * screen_h)
         else:
@@ -326,7 +341,12 @@ class CalibrationOverlay:
             bnd_top = self._bounds["top"]
             bnd_bottom = self._bounds["bottom"]
 
-            # Linear interpolation: bound range → screen range
+            # If axis is inverted, swap the bounds so the mapping is correct
+            if self._x_inverted:
+                bnd_left, bnd_right = bnd_right, bnd_left
+            if self._y_inverted:
+                bnd_top, bnd_bottom = bnd_bottom, bnd_top
+
             x_range = bnd_right - bnd_left
             y_range = bnd_bottom - bnd_top
             if abs(x_range) < 0.001:
@@ -471,6 +491,12 @@ class CalibrationOverlay:
         bnd_right = self._bounds["right"]
         bnd_top = self._bounds["top"]
         bnd_bottom = self._bounds["bottom"]
+
+        # Apply same inversion correction as _map_gaze_to_screen
+        if self._x_inverted:
+            bnd_left, bnd_right = bnd_right, bnd_left
+        if self._y_inverted:
+            bnd_top, bnd_bottom = bnd_bottom, bnd_top
 
         x_range = bnd_right - bnd_left
         y_range = bnd_bottom - bnd_top
