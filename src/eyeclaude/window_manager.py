@@ -27,9 +27,26 @@ class WindowManager:
         self._state = state
         self._current_quadrant: Quadrant | None = None
 
+    def is_registered_window_focused(self) -> bool:
+        """Check if any registered terminal window currently has focus."""
+        try:
+            fg_hwnd = win32gui.GetForegroundWindow()
+            terminals = self._state.get_all_terminals()
+            return any(t.window_handle == fg_hwnd for t in terminals)
+        except Exception:
+            return False
+
     def update_focus(self, quadrant: Quadrant | None) -> None:
-        """Switch focus to the terminal in the given quadrant, if different from current."""
+        """Switch focus to the terminal in the given quadrant, if different from current.
+
+        Only switches if a registered terminal currently has focus — this
+        pauses tracking when the user alt-tabs to a browser or other app.
+        """
         if quadrant is None:
+            return
+
+        # Don't steal focus from non-registered windows (browser, etc.)
+        if not self.is_registered_window_focused():
             return
 
         if quadrant == self._current_quadrant:
