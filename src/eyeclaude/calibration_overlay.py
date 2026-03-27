@@ -107,8 +107,6 @@ class CalibrationOverlay:
         self._bound_step_index: int = 0
         self._bounds: dict[str, float] = {}
         self._bounds_done: bool = False
-        self._collecting_samples: list[tuple[float, float]] = []
-        self._collecting: bool = False
 
         # Smoothing
         self._smooth_x: float | None = None
@@ -266,38 +264,13 @@ class CalibrationOverlay:
             self._set_status("No face detected! Look at the camera.")
             return
 
-        # Start collecting samples for this bound
-        if not self._collecting:
-            self._collecting = True
-            self._collecting_samples = []
-            self._set_status("Hold still... recording (1s)")
-            # Visual feedback — dot turns red during recording
-            if self._gaze_dot_id:
-                self._canvas.itemconfig(self._gaze_dot_id, fill="#ff4444")
-            self._root.after(1000, self._finalize_bound)
-            return
-
-    def _finalize_bound(self) -> None:
-        """Called after 1 second of sample collection."""
-        self._collecting = False
-        # Restore dot color
-        if self._gaze_dot_id:
-            self._canvas.itemconfig(self._gaze_dot_id, fill="#00ff88")
+        # Instant capture — take the current gaze value right now.
+        # No delay, no collection period. This captures the exact moment
+        # the user is looking at the corner, before eyes drift to read text.
         step = BOUND_STEPS[self._bound_step_index]
-
-        if len(self._collecting_samples) < 5:
-            self._set_status(f"Not enough samples. Try again: {BOUND_LABELS[step]}")
-            return
-
-        xs = [s[0] for s in self._collecting_samples]
-        ys = [s[1] for s in self._collecting_samples]
-        median_x = float(np.median(xs))
-        median_y = float(np.median(ys))
-
-        # Store both x and y for each corner point
-        self._bounds[f"{step}_x"] = median_x
-        self._bounds[f"{step}_y"] = median_y
-        print(f"  {step}: gaze=({median_x:.4f}, {median_y:.4f})")
+        self._bounds[f"{step}_x"] = gaze[0]
+        self._bounds[f"{step}_y"] = gaze[1]
+        print(f"  {step}: gaze=({gaze[0]:.4f}, {gaze[1]:.4f})")
 
         self._bound_step_index += 1
 
@@ -345,7 +318,6 @@ class CalibrationOverlay:
         self._bound_step_index = 0
         self._bounds = {}
         self._bounds_done = False
-        self._collecting = False
         self._smooth_x = None
         self._smooth_y = None
         # Re-create edge marker if it was deleted
@@ -423,10 +395,6 @@ class CalibrationOverlay:
             r = self.GAZE_DOT_RADIUS
             self._canvas.coords(self._gaze_dot_id, dx - r, dy - r, dx + r, dy + r)
             self._canvas.tag_raise(self._gaze_dot_id)
-
-            # Collect samples during bound calibration
-            if self._collecting:
-                self._collecting_samples.append(gaze)
 
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
