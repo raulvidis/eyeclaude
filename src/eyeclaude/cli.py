@@ -192,14 +192,31 @@ def config_cmd(dwell_time, border_thickness, webcam_index):
 def register():
     """Register the current terminal with EyeClaude and install Claude Code hooks."""
     import os
-    import win32console
+    import win32gui
 
     pid = os.getpid()
 
-    # Get the console window handle
-    hwnd = win32console.GetConsoleWindow()
+    # Get the terminal window handle. GetConsoleWindow() returns 0 when
+    # run from a subprocess (like Claude Code), so fall back to finding
+    # the foreground Windows Terminal window.
+    try:
+        import win32console
+        hwnd = win32console.GetConsoleWindow()
+    except Exception:
+        hwnd = 0
+
     if not hwnd:
-        click.echo("Error: Could not determine console window handle.")
+        # Find the foreground window — when the user runs /eyeclaude-register,
+        # their terminal is the active window
+        hwnd = win32gui.GetForegroundWindow()
+        if hwnd:
+            cls = win32gui.GetClassName(hwnd)
+            if "CASCADIA" not in cls.upper() and "TERMINAL" not in cls.upper():
+                # Not a terminal window — try to find one
+                click.echo(f"Warning: Foreground window ({cls}) may not be a terminal.")
+
+    if not hwnd:
+        click.echo("Error: Could not determine terminal window handle.")
         return
 
     try:

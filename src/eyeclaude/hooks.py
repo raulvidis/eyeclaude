@@ -4,11 +4,27 @@ import json
 import os
 import sys
 
-import win32console
 import win32file
 
 
 PIPE_NAME = r"\\.\pipe\eyeclaude"
+
+
+def _get_terminal_hwnd() -> int:
+    """Get the terminal window handle, falling back to foreground window."""
+    try:
+        import win32console
+        hwnd = win32console.GetConsoleWindow()
+        if hwnd:
+            return hwnd
+    except Exception:
+        pass
+    # Fallback: foreground window (works when called from Claude Code hooks)
+    try:
+        import win32gui
+        return win32gui.GetForegroundWindow()
+    except Exception:
+        return 0
 
 
 def main():
@@ -25,7 +41,7 @@ def main():
     # Use console window handle as stable identifier — all processes in
     # the same terminal share the same HWND, unlike PID which changes
     # per hook invocation.
-    hwnd = win32console.GetConsoleWindow()
+    hwnd = _get_terminal_hwnd()
 
     # Read stdin for hook input (Claude Code sends JSON)
     stdin_data = ""
