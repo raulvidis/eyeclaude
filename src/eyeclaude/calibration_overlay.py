@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from eyeclaude.terminal_discovery import discover_terminals, get_window_rect, DiscoveredTerminal
-from eyeclaude.eye_tracker import CalibrationData, _get_iris_center, ensure_model
+from eyeclaude.eye_tracker import (
+    CalibrationData, _get_iris_center, ensure_model,
+    LEFT_IRIS_CENTER, RIGHT_IRIS_CENTER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,9 @@ class CalibrationOverlay:
         self._state = CalibrationState()
         self._terminal_rects: list[TerminalRect] = []
         self._calibration_results: dict[int, tuple[float, float]] = {}  # hwnd -> (median_x, median_y)
-        self._gaze_pos: tuple[float, float] | None = None  # Screen-space gaze position
+        self._gaze_pos: tuple[float, float] | None = None  # Raw iris position (0-1) for dot
+        self._gaze_calibration_pos: tuple[float, float] | None = None  # Amplified pos for calibration
+        self._camera_error: str | None = None  # Surfaced to UI
         self._running = False
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
@@ -307,23 +312,32 @@ class CalibrationOverlay:
             return
 
         with self._gaze_lock:
-            pos = self._gaze_pos
+            dot_pos = self._gaze_pos  # Raw iris (0-1) for visual dot
+            cal_pos = self._gaze_calibration_pos  # Amplified for calibration samples
+            cam_err = self._camera_error
 
-        if pos and self._gaze_dot_id:
+        # Show camera errors in the status bar
+        if cam_err:
+            self._set_status(f"Camera error: {cam_err}")
+            self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
+            return
+
+        if dot_pos and self._gaze_dot_id:
             screen_w = self._root.winfo_screenwidth()
             screen_h = self._root.winfo_screenheight()
-            # _get_iris_center returns amplified nose-relative values that can
-            # exceed [0,1]. Clamp to screen bounds so the dot stays visible.
-            sx = max(0, min(screen_w, int(pos[0] * screen_w)))
-            sy = max(0, min(screen_h, int(pos[1] * screen_h)))
+            # Raw iris x/y from MediaPipe are in [0,1] image-space.
+            # Frame is already flipped (cv2.flip(frame, 1)) so x maps directly.
+            sx = int(dot_pos[0] * screen_w)
+            sy = int(dot_pos[1] * screen_h)
+            sx = max(0, min(screen_w, sx))
+            sy = max(0, min(screen_h, sy))
             r = self.GAZE_DOT_RADIUS
             self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
-            # Raise dot above other canvas items so it's always visible
             self._canvas.tag_raise(self._gaze_dot_id)
 
-            # If recording, add this sample (raw values, not clamped)
-            if self._state.recording:
-                self._state.add_sample(pos[0], pos[1])
+            # Record amplified gaze values for calibration (what the eye tracker uses)
+            if self._state.recording and cal_pos:
+                self._state.add_sample(cal_pos[0], cal_pos[1])
 
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
@@ -332,28 +346,42 @@ class CalibrationOverlay:
         import cv2
         import mediapipe as mp_lib
 
-        model_path = ensure_model()
+        try:
+            model_path = ensure_model()
+        except Exception as e:
+            with self._gaze_lock:
+                self._camera_error = f"Model download failed: {e}"
+            return
+
         cap = cv2.VideoCapture(self._webcam_index)
         if not cap.isOpened():
-            logger.error("Cannot open webcam %d", self._webcam_index)
+            with self._gaze_lock:
+                self._camera_error = f"Cannot open webcam {self._webcam_index}"
             return
 
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        options = mp_lib.tasks.vision.FaceLandmarkerOptions(
-            base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
-            running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
-            num_faces=1,
-            min_face_detection_confidence=0.3,
-            min_tracking_confidence=0.3,
-        )
-        landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
+        try:
+            options = mp_lib.tasks.vision.FaceLandmarkerOptions(
+                base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
+                running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=0.3,
+                min_tracking_confidence=0.3,
+            )
+            landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
+        except Exception as e:
+            with self._gaze_lock:
+                self._camera_error = f"MediaPipe init failed: {e}"
+            cap.release()
+            return
 
         try:
             while self._running:
                 ret, frame = cap.read()
                 if not ret:
+                    time.sleep(0.01)
                     continue
 
                 frame = cv2.flip(frame, 1)
@@ -362,18 +390,33 @@ class CalibrationOverlay:
                 result = landmarker.detect(mp_image)
 
                 if result.face_landmarks:
-                    gaze = _get_iris_center(result.face_landmarks[0])
-                    if gaze:
-                        with self._gaze_lock:
-                            self._gaze_pos = gaze
-                    else:
-                        with self._gaze_lock:
-                            self._gaze_pos = None
+                    landmarks = result.face_landmarks[0]
+                    # Raw iris position for the visual dot (0-1 image space)
+                    try:
+                        l_iris = landmarks[LEFT_IRIS_CENTER]
+                        r_iris = landmarks[RIGHT_IRIS_CENTER]
+                        raw_x = (l_iris.x + r_iris.x) / 2
+                        raw_y = (l_iris.y + r_iris.y) / 2
+                        raw_pos = (raw_x, raw_y)
+                    except (IndexError, AttributeError):
+                        raw_pos = None
+
+                    # Amplified gaze for calibration recording
+                    cal_pos = _get_iris_center(landmarks)
+
+                    with self._gaze_lock:
+                        self._gaze_pos = raw_pos
+                        self._gaze_calibration_pos = cal_pos
                 else:
                     with self._gaze_lock:
                         self._gaze_pos = None
+                        self._gaze_calibration_pos = None
 
                 time.sleep(0.03)
+        except Exception as e:
+            logger.error("Gaze loop error: %s", e)
+            with self._gaze_lock:
+                self._camera_error = f"Tracking error: {e}"
         finally:
             landmarker.close()
             cap.release()
