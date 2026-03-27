@@ -39,14 +39,11 @@ class WindowManager:
     def update_focus(self, quadrant: Quadrant | None) -> None:
         """Switch focus to the terminal in the given quadrant, if different from current.
 
-        Only switches if a registered terminal currently has focus — this
-        pauses tracking when the user alt-tabs to a browser or other app.
+        The dwell tracker (400ms) already prevents accidental switches,
+        so we don't block on unregistered windows — this allows focus to
+        resume when returning from another monitor or app.
         """
         if quadrant is None:
-            return
-
-        # Don't steal focus from non-registered windows (browser, etc.)
-        if not self.is_registered_window_focused():
             return
 
         if quadrant == self._current_quadrant:

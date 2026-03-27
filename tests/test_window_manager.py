@@ -60,36 +60,28 @@ class TestWindowManager:
             manager.update_focus(None)
             mock_focus.assert_not_called()
 
-    def test_no_switch_when_unregistered_window_focused(self):
+    def test_switches_even_when_unregistered_window_focused(self):
         state = SharedState()
         state.register_terminal(pid=1, window_handle=111, quadrant=Quadrant.TOP_LEFT)
         manager = WindowManager(state)
 
-        # Foreground window is 999 — not a registered terminal
-        with patch("eyeclaude.window_manager.set_foreground_window") as mock_focus, \
-             self._patch_foreground(999):
+        # Foreground window is 999 — not a registered terminal, but dwell
+        # tracker already prevents accidental switches so we allow it
+        with patch("eyeclaude.window_manager.set_foreground_window") as mock_focus:
             manager.update_focus(Quadrant.TOP_LEFT)
-            mock_focus.assert_not_called()
+            mock_focus.assert_called_once_with(111)
 
-    def test_resumes_when_registered_window_refocused(self):
+    def test_resumes_after_alt_tab(self):
         state = SharedState()
         state.register_terminal(pid=1, window_handle=111, quadrant=Quadrant.TOP_LEFT)
         state.register_terminal(pid=2, window_handle=222, quadrant=Quadrant.TOP_RIGHT)
         manager = WindowManager(state)
 
-        # First, focus a registered window
-        with patch("eyeclaude.window_manager.set_foreground_window"), \
-             self._patch_foreground(111):
+        # Focus a registered window
+        with patch("eyeclaude.window_manager.set_foreground_window"):
             manager.update_focus(Quadrant.TOP_LEFT)
 
-        # Alt-tab away — should not switch
-        with patch("eyeclaude.window_manager.set_foreground_window") as mock_focus, \
-             self._patch_foreground(999):
-            manager.update_focus(Quadrant.TOP_RIGHT)
-            mock_focus.assert_not_called()
-
-        # Come back — should switch now
-        with patch("eyeclaude.window_manager.set_foreground_window") as mock_focus, \
-             self._patch_foreground(111):
+        # Switch to different quadrant (even from unregistered foreground)
+        with patch("eyeclaude.window_manager.set_foreground_window") as mock_focus:
             manager.update_focus(Quadrant.TOP_RIGHT)
             mock_focus.assert_called_once_with(222)
