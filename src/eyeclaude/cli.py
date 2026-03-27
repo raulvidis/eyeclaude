@@ -189,50 +189,86 @@ def config_cmd(dwell_time, border_thickness, webcam_index):
 
 
 @main.command()
-def register():
-    """Register the current terminal with EyeClaude and install Claude Code hooks."""
+@click.option("--all", "register_all", is_flag=True, help="Register all visible Windows Terminal windows")
+def register(register_all):
+    """Register terminal(s) with EyeClaude and install Claude Code hooks."""
     import os
     import win32gui
 
-    pid = os.getpid()
+    if register_all:
+        # Find all visible Windows Terminal windows and register each one
+        terminals = _find_all_terminal_windows()
+        if not terminals:
+            click.echo("No Windows Terminal windows found.")
+            return
 
-    # Get the terminal window handle. GetConsoleWindow() returns 0 when
-    # run from a subprocess (like Claude Code), so fall back to finding
-    # the foreground Windows Terminal window.
-    try:
-        import win32console
-        hwnd = win32console.GetConsoleWindow()
-    except Exception:
-        hwnd = 0
+        registered = 0
+        for hwnd in terminals:
+            try:
+                _send_pipe_message({
+                    "type": "register",
+                    "window_handle": hwnd,
+                    "pid": hwnd,  # Use hwnd as pseudo-pid for uniqueness
+                })
+                left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                click.echo(f"Registered HWND={hwnd} at ({left},{top})-({right},{bottom})")
+                registered += 1
+            except Exception as e:
+                click.echo(f"Failed to register HWND={hwnd}: {e}")
 
-    if not hwnd:
-        # Find the foreground window — when the user runs /eyeclaude-register,
-        # their terminal is the active window
-        hwnd = win32gui.GetForegroundWindow()
-        if hwnd:
-            cls = win32gui.GetClassName(hwnd)
-            if "CASCADIA" not in cls.upper() and "TERMINAL" not in cls.upper():
-                # Not a terminal window — try to find one
-                click.echo(f"Warning: Foreground window ({cls}) may not be a terminal.")
+        click.echo(f"Registered {registered} terminal(s).")
+    else:
+        # Register the foreground terminal window
+        try:
+            import win32console
+            hwnd = win32console.GetConsoleWindow()
+        except Exception:
+            hwnd = 0
 
-    if not hwnd:
-        click.echo("Error: Could not determine terminal window handle.")
-        return
+        if not hwnd:
+            hwnd = win32gui.GetForegroundWindow()
+            if hwnd:
+                cls = win32gui.GetClassName(hwnd)
+                if "CASCADIA" not in cls.upper() and "TERMINAL" not in cls.upper():
+                    click.echo(f"Warning: Foreground window ({cls}) may not be a terminal.")
 
-    try:
-        _send_pipe_message({
-            "type": "register",
-            "window_handle": hwnd,
-            "pid": pid,
-        })
-        click.echo(f"Registered with EyeClaude (pid={pid}, hwnd={hwnd})")
-    except Exception as e:
-        click.echo(f"Failed to register: {e}. Is EyeClaude running?")
-        return
+        if not hwnd:
+            click.echo("Error: Could not determine terminal window handle.")
+            click.echo("Tip: Use 'eyeclaude register --all' to register all terminal windows at once.")
+            return
+
+        pid = os.getpid()
+        try:
+            _send_pipe_message({
+                "type": "register",
+                "window_handle": hwnd,
+                "pid": pid,
+            })
+            click.echo(f"Registered with EyeClaude (pid={pid}, hwnd={hwnd})")
+        except Exception as e:
+            click.echo(f"Failed to register: {e}. Is EyeClaude running?")
+            return
 
     # Install Claude Code hooks in project-local settings
     _install_claude_hooks()
     click.echo("Claude Code status hooks installed.")
+
+
+def _find_all_terminal_windows() -> list[int]:
+    """Find all visible Windows Terminal (CASCADIA) windows."""
+    import win32gui
+
+    terminals = []
+
+    def callback(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            cls = win32gui.GetClassName(hwnd)
+            if "CASCADIA" in cls.upper():
+                terminals.append(hwnd)
+        return True
+
+    win32gui.EnumWindows(callback, None)
+    return terminals
 
 
 @main.command()
