@@ -126,11 +126,13 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         offset_x = iris_x - nose.x
         offset_y = iris_y - nose.y
 
-        # Amplify the offset to make small eye movements matter more
-        # Then combine with nose position for head-turn contribution
-        amplification = 8.0
-        gaze_x = nose.x + offset_x * amplification
-        gaze_y = nose.y + offset_y * amplification
+        # Amplify the offset to make small eye movements matter more.
+        # Y gets higher amplification because vertical eye/head movement
+        # is naturally smaller than horizontal.
+        amp_x = 8.0
+        amp_y = 12.0
+        gaze_x = nose.x + offset_x * amp_x
+        gaze_y = nose.y + offset_y * amp_y
 
         return (gaze_x, gaze_y)
     except (IndexError, AttributeError):

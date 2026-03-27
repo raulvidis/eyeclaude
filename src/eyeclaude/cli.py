@@ -288,7 +288,8 @@ EYECLAUDE_HOOKS = {
 
 
 def _load_settings() -> tuple[Path, dict]:
-    settings_dir = Path(".claude")
+    # Install hooks globally so they work in every Claude Code session
+    settings_dir = Path.home() / ".claude"
     settings_dir.mkdir(exist_ok=True)
     settings_path = settings_dir / "settings.local.json"
     settings = {}
