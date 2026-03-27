@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 
 import cv2
@@ -9,7 +10,7 @@ import mediapipe as mp
 import numpy as np
 
 from eyeclaude.eye_tracker import CalibrationData, _get_iris_center, ensure_model
-from eyeclaude.shared_state import Quadrant
+from eyeclaude.shared_state import Quadrant, SharedState
 
 logger = logging.getLogger(__name__)
 
@@ -49,27 +50,19 @@ def load_calibration(path: Path = DEFAULT_CALIBRATION_PATH) -> CalibrationData:
         return CalibrationData()
 
 
-def _quadrant_screen_center(quadrant: Quadrant, screen_w: int, screen_h: int) -> tuple[int, int]:
-    """Get the pixel center of a quadrant on screen."""
-    half_w = screen_w // 2
-    half_h = screen_h // 2
-    centers = {
-        Quadrant.TOP_LEFT: (half_w // 2, half_h // 2),
-        Quadrant.TOP_RIGHT: (half_w + half_w // 2, half_h // 2),
-        Quadrant.BOTTOM_LEFT: (half_w // 2, half_h + half_h // 2),
-        Quadrant.BOTTOM_RIGHT: (half_w + half_w // 2, half_h + half_h // 2),
-    }
-    return centers[quadrant]
+def run_calibration(
+    webcam_index: int = 0,
+    state: SharedState | None = None,
+) -> CalibrationData | None:
+    """Run calibration using registered terminal windows.
 
+    If terminals are registered in state, highlights each terminal window
+    in sequence and asks the user to look at it naturally for 3 seconds.
+    This captures real-world gaze patterns instead of artificial dot-staring.
 
-def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
-    """Run interactive calibration. Returns CalibrationData or None if cancelled."""
-    import win32api
-    import win32con
-
-    screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-    screen_h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-
+    Falls back to simple console-based calibration if no state/terminals.
+    """
+    model_path = ensure_model()
     cap = cv2.VideoCapture(webcam_index)
     if not cap.isOpened():
         logger.error("Cannot open webcam %d", webcam_index)
@@ -78,118 +71,139 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    model_path = ensure_model()
-    calibration = CalibrationData()
-
-    window_name = "EyeClaude Calibration"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    # Move and resize to fill the screen, then set topmost + fullscreen
-    cv2.moveWindow(window_name, 0, 0)
-    cv2.resizeWindow(window_name, screen_w, screen_h)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
-    # Show an initial black frame to make the window appear
-    canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
-    cv2.putText(canvas, "Initializing webcam...", (screen_w // 2 - 200, screen_h // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    cv2.imshow(window_name, canvas)
-    cv2.waitKey(100)
-
-    # Try to bring the OpenCV window to the foreground on Windows 11
-    try:
-        import win32gui
-        hwnd = win32gui.FindWindow(None, window_name)
-        if hwnd:
-            win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
-            win32gui.SetForegroundWindow(hwnd)
-    except Exception:
-        pass  # Window focus is nice-to-have, not critical
-
     options = mp.tasks.vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
         running_mode=mp.tasks.vision.RunningMode.IMAGE,
         num_faces=1,
-        min_face_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+        min_face_detection_confidence=0.3,
+        min_tracking_confidence=0.3,
     )
     landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
+    # Check if we have registered terminals to calibrate with
+    terminals = state.get_all_terminals() if state else []
+    quadrants_to_calibrate = [t.quadrant for t in terminals]
+
+    if not quadrants_to_calibrate:
+        # No terminals registered — use all 4 quadrants with console prompts
+        quadrants_to_calibrate = list(QUADRANT_ORDER)
+
     try:
-        for quadrant in QUADRANT_ORDER:
-            dot_x, dot_y = _quadrant_screen_center(quadrant, screen_w, screen_h)
-            label = QUADRANT_LABELS[quadrant]
-            collecting = True
-
-            while collecting:
-                ret, frame = cap.read()
-                if not ret:
-                    continue
-
-                frame = cv2.flip(frame, 1)
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                result = landmarker.detect(mp_image)
-
-                # Draw calibration screen
-                canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
-
-                # Draw all dots
-                for q in QUADRANT_ORDER:
-                    dx, dy = _quadrant_screen_center(q, screen_w, screen_h)
-                    color = (0, 255, 0) if q == quadrant else (80, 80, 80)
-                    if q in calibration.points:
-                        color = (255, 150, 0)
-                    if q == quadrant:
-                        color = (0, 255, 0)
-                    cv2.circle(canvas, (dx, dy), 20, color, -1)
-
-                # Show face detection status
-                face_status = "Face detected" if result.face_landmarks else "No face - look at webcam"
-                status_color = (0, 255, 0) if result.face_landmarks else (0, 0, 255)
-                cv2.putText(canvas, face_status, (screen_w // 2 - 150, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
-
-                # Instructions
-                cv2.putText(
-                    canvas,
-                    f"Look at the GREEN dot ({label}) and press SPACE",
-                    (screen_w // 2 - 350, screen_h - 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2,
-                )
-                cv2.putText(
-                    canvas,
-                    "Press ESC to cancel",
-                    (screen_w // 2 - 150, screen_h - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1,
-                )
-
-                cv2.imshow(window_name, canvas)
-                key = cv2.waitKey(1) & 0xFF
-
-                if key == 27:  # ESC
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    landmarker.close()
-                    return None
-
-                if key == 32:  # SPACE
-                    if result.face_landmarks:
-                        landmarks = result.face_landmarks[0]
-                        iris_pos = _get_iris_center(landmarks)
-                        if iris_pos:
-                            calibration.points[quadrant] = iris_pos
-                            logger.info(f"Calibrated {label}: {iris_pos}")
-                            collecting = False
-                        else:
-                            logger.warning("No iris detected — try again")
-                    else:
-                        logger.warning("No face detected — try again")
+        calibration = _run_terminal_calibration(
+            cap, landmarker, quadrants_to_calibrate,
+            terminals if terminals else None,
+        )
     finally:
         landmarker.close()
+        cap.release()
 
-    cap.release()
-    cv2.destroyAllWindows()
+    if calibration and calibration.points:
+        save_calibration(calibration)
+        return calibration
+    return None
 
-    save_calibration(calibration)
+
+def _run_terminal_calibration(
+    cap,
+    landmarker,
+    quadrants: list[Quadrant],
+    terminals: list | None,
+) -> CalibrationData | None:
+    """Calibrate by having the user look at each terminal naturally.
+
+    For each quadrant:
+    1. Flash the terminal title to indicate which one to look at
+    2. Collect gaze samples for 3 seconds
+    3. Average the samples for that quadrant's calibration point
+    """
+    import win32gui
+
+    calibration = CalibrationData()
+    sample_duration = 3.0  # seconds per quadrant
+
+    # Map quadrants to terminal HWNDs for title flashing
+    quadrant_hwnds = {}
+    if terminals:
+        for t in terminals:
+            quadrant_hwnds[t.quadrant] = t.window_handle
+
+    print()
+    print("=== EyeClaude Calibration ===")
+    print("Look naturally at each terminal window when prompted.")
+    print("Just look at it as you would when working — no need to stare at a specific spot.")
+    print()
+
+    for quadrant in quadrants:
+        label = QUADRANT_LABELS[quadrant]
+        hwnd = quadrant_hwnds.get(quadrant)
+
+        # Flash the target terminal's title
+        original_title = None
+        if hwnd:
+            try:
+                original_title = win32gui.GetWindowText(hwnd)
+                win32gui.SetWindowText(hwnd, f">>> LOOK HERE <<< ({label})")
+            except Exception:
+                pass
+
+        print(f"Look at the {label} terminal now...")
+
+        # Collect gaze samples
+        samples_x = []
+        samples_y = []
+        start = time.monotonic()
+
+        while time.monotonic() - start < sample_duration:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            frame = cv2.flip(frame, 1)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = landmarker.detect(mp_image)
+
+            if result.face_landmarks:
+                gaze = _get_iris_center(result.face_landmarks[0])
+                if gaze:
+                    samples_x.append(gaze[0])
+                    samples_y.append(gaze[1])
+
+            # Small sleep to avoid burning CPU
+            time.sleep(0.03)
+
+        # Restore original title
+        if hwnd and original_title is not None:
+            try:
+                win32gui.SetWindowText(hwnd, original_title)
+            except Exception:
+                pass
+
+        if len(samples_x) < 5:
+            print(f"  Warning: Only got {len(samples_x)} samples for {label}.")
+            print("  Make sure your face is visible to the webcam.")
+            if len(samples_x) == 0:
+                continue
+
+        # Use the median to filter out outliers (blinks, glances away)
+        avg_x = float(np.median(samples_x))
+        avg_y = float(np.median(samples_y))
+        calibration.points[quadrant] = (avg_x, avg_y)
+        print(f"  Captured {len(samples_x)} samples -> ({avg_x:.4f}, {avg_y:.4f})")
+
+        # Brief pause between quadrants
+        time.sleep(0.5)
+
+    print()
+    if len(calibration.points) >= 2:
+        print(f"Calibration complete! {len(calibration.points)} quadrants calibrated.")
+        # Show spread to help diagnose issues
+        xs = [p[0] for p in calibration.points.values()]
+        ys = [p[1] for p in calibration.points.values()]
+        print(f"  X range: {min(xs):.4f} - {max(xs):.4f} (spread: {max(xs)-min(xs):.4f})")
+        print(f"  Y range: {min(ys):.4f} - {max(ys):.4f} (spread: {max(ys)-min(ys):.4f})")
+    else:
+        print("Calibration failed — not enough data.")
+        return None
+
     return calibration

@@ -38,19 +38,10 @@ def main():
 def start():
     """Launch EyeClaude (webcam + eye tracking + pipe listener + overlay)."""
     config = load_config()
-    calibration = load_calibration()
-
-    if not calibration.points:
-        click.echo("No calibration data found. Running calibration first...")
-        calibration = run_calibration(webcam_index=config.webcam_index)
-        if calibration is None:
-            click.echo("Calibration cancelled. Exiting.")
-            return
-
     state = SharedState()
     status_monitor = StatusMonitor(state, flash_duration_ms=config.finished_flash_duration_ms)
 
-    # Wire status monitor into pipe server's message handling
+    # Start pipe server first so terminals can register before calibration
     pipe_server = PipeServer(state)
     original_handle = pipe_server.handle_message
 
@@ -71,6 +62,31 @@ def start():
 
     pipe_server.handle_message = handle_with_monitor
 
+    # Start pipe server so terminals can register
+    pipe_server.start()
+    click.echo(f"Listening on pipe: {PIPE_NAME}")
+    click.echo("Register your terminals now with '/eyeclaude-register' in each one.")
+    click.echo("Press ENTER here when all terminals are registered to start calibration...")
+    input()
+
+    # Calibrate using the registered terminal windows
+    calibration = load_calibration()
+    terminals = state.get_all_terminals()
+    if terminals:
+        click.echo(f"{len(terminals)} terminal(s) registered. Starting calibration...")
+        calibration = run_calibration(webcam_index=config.webcam_index, state=state)
+        if calibration is None:
+            click.echo("Calibration failed. Exiting.")
+            pipe_server.stop()
+            return
+    elif not calibration.points:
+        click.echo("No terminals registered and no saved calibration. Running default calibration...")
+        calibration = run_calibration(webcam_index=config.webcam_index)
+        if calibration is None:
+            click.echo("Calibration failed. Exiting.")
+            pipe_server.stop()
+            return
+
     eye_tracker = EyeTracker(
         state=state,
         calibration=calibration,
@@ -80,14 +96,11 @@ def start():
     overlay = Overlay(state=state)
     window_manager = WindowManager(state)
 
-    # Start all components
-    pipe_server.start()
     eye_tracker.start()
     overlay.start()
 
     click.echo("EyeClaude started. Press Ctrl+C to stop.")
-    click.echo(f"Listening on pipe: {PIPE_NAME}")
-    click.echo(f"Registered quadrants: {len(calibration.points)}")
+    click.echo(f"Tracking {len(calibration.points)} quadrants.")
 
     stop_event = threading.Event()
 
