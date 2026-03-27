@@ -146,6 +146,8 @@ class EyeTracker:
         calibration: CalibrationData,
         dwell_time_ms: int = 400,
         webcam_index: int = 0,
+        cap=None,
+        landmarker=None,
     ):
         self._state = state
         self._calibration = calibration
@@ -153,28 +155,29 @@ class EyeTracker:
         self._webcam_index = webcam_index
         self._running = False
         self._thread: threading.Thread | None = None
-        self._cap = None
-        self._landmarker = None
+        self._cap = cap
+        self._landmarker = landmarker
 
     def start(self) -> None:
-        """Open webcam on main thread, then start tracking in background."""
-        self._cap = cv2.VideoCapture(self._webcam_index)
-        if not self._cap.isOpened():
-            logger.error("Cannot open webcam %d", self._webcam_index)
-            return
+        """Start tracking. Uses pre-opened webcam/landmarker if provided, otherwise opens new ones."""
+        if self._cap is None:
+            self._cap = cv2.VideoCapture(self._webcam_index)
+            if not self._cap.isOpened():
+                logger.error("Cannot open webcam %d", self._webcam_index)
+                return
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        model_path = ensure_model()
-        options = mp.tasks.vision.FaceLandmarkerOptions(
-            base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
-            running_mode=mp.tasks.vision.RunningMode.IMAGE,
-            num_faces=1,
-            min_face_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+        if self._landmarker is None:
+            model_path = ensure_model()
+            options = mp.tasks.vision.FaceLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+                running_mode=mp.tasks.vision.RunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
         self._running = True
         self._thread = threading.Thread(target=self._track_loop, daemon=True)

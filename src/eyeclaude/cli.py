@@ -160,15 +160,16 @@ def start():
     for q, (gx, gy) in calibration.points.items():
         click.echo(f"  {q.value}: gaze=({gx:.4f}, {gy:.4f})")
 
-    # Brief pause to let webcam fully release from calibration overlay
-    time.sleep(0.5)
+    # Reuse webcam + landmarker from calibration overlay (avoids 30-60s reinit)
+    cap, landmarker = overlay_app.get_resources()
 
-    # Start eye tracking (webcam opened on main thread)
     eye_tracker = EyeTracker(
         state=state,
         calibration=calibration,
         dwell_time_ms=config.dwell_time_ms,
         webcam_index=config.webcam_index,
+        cap=cap,
+        landmarker=landmarker,
     )
     window_manager = WindowManager(state)
     eye_tracker.start()

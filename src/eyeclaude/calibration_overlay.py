@@ -187,10 +187,14 @@ class CalibrationOverlay:
 
         self._running = False
         time.sleep(0.1)
-        self._landmarker.close()
-        self._cap.release()
+        # Don't close webcam/landmarker — caller can reuse them via get_resources()
 
         return self._build_calibration_data()
+
+    def get_resources(self) -> tuple:
+        """Return (cap, landmarker) for reuse by the eye tracker.
+        Caller takes ownership — must close them when done."""
+        return self._cap, self._landmarker
 
     def _build_gui(self) -> None:
         self._root = tk.Tk()
