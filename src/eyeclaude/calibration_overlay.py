@@ -332,6 +332,10 @@ class CalibrationOverlay:
         self._running = False
         self._root.destroy()
 
+    def _set_status(self, text: str) -> None:
+        if self._status_label_id and self._canvas:
+            self._canvas.itemconfig(self._status_label_id, text=text)
+
     def _map_gaze_to_screen(self, gaze_x: float, gaze_y: float) -> tuple[int, int]:
         """Map raw gaze values to screen coordinates using calibrated bounds."""
         screen_w = self._root.winfo_screenwidth()
