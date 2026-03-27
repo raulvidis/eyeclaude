@@ -13,12 +13,11 @@ import click
 import win32file
 import win32pipe
 
-from eyeclaude.calibration import load_calibration, run_calibration, DEFAULT_CALIBRATION_PATH
+from eyeclaude.calibration import load_calibration, run_calibration, save_calibration, DEFAULT_CALIBRATION_PATH
 from eyeclaude.config import load_config, save_config, EyeClaudeConfig, DEFAULT_CONFIG_PATH
 from eyeclaude.eye_tracker import EyeTracker
-from eyeclaude.overlay import Overlay
-from eyeclaude.pipe_server import PipeServer, PIPE_NAME
-from eyeclaude.shared_state import SharedState
+from eyeclaude.pipe_server import PipeServer, PIPE_NAME, _assign_quadrant_by_position
+from eyeclaude.shared_state import SharedState, InstanceStatus
 from eyeclaude.status_monitor import StatusMonitor
 from eyeclaude.window_manager import WindowManager
 
@@ -34,25 +33,103 @@ def main():
     )
 
 
+def _install_statusline():
+    """Replace ccstatusline with eyeclaude-statusline wrapper in settings.json."""
+    import shutil
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
+
+    backup_path = Path.home() / ".eyeclaude" / "statusline_backup.json"
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    if "statusLine" in settings:
+        backup_path.write_text(json.dumps(settings["statusLine"]), encoding="utf-8")
+
+    wrapper_cmd = shutil.which("eyeclaude-statusline")
+    if wrapper_cmd:
+        cmd = f'"{wrapper_cmd}"'
+    else:
+        cmd = "eyeclaude-statusline"
+
+    settings["statusLine"] = {
+        "type": "command",
+        "command": cmd,
+        "padding": 0,
+    }
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    click.echo("Statusline wrapper installed.")
+
+
+def _restore_statusline():
+    """Restore original statusline config."""
+    backup_path = Path.home() / ".eyeclaude" / "statusline_backup.json"
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if not backup_path.exists() or not settings_path.exists():
+        return
+    try:
+        original = json.loads(backup_path.read_text(encoding="utf-8"))
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings["statusLine"] = original
+        settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        backup_path.unlink()
+        click.echo("Statusline restored.")
+    except Exception:
+        pass
+
+
+def _update_active_status_files(state: SharedState) -> None:
+    """Update the active flag in all terminal status files."""
+    status_dir = Path.home() / ".eyeclaude" / "status"
+    if not status_dir.exists():
+        return
+    active_quad = state.active_quadrant
+    for terminal in state.get_all_terminals():
+        status_file = status_dir / f"{terminal.window_handle}.json"
+        if status_file.exists():
+            try:
+                data = json.loads(status_file.read_text(encoding="utf-8"))
+                data["active"] = terminal.quadrant == active_quad
+                status_file.write_text(json.dumps(data), encoding="utf-8")
+            except Exception:
+                pass
+
+
+def _cleanup_status_files() -> None:
+    """Remove all status files on shutdown."""
+    status_dir = Path.home() / ".eyeclaude" / "status"
+    if status_dir.exists():
+        for f in status_dir.glob("*.json"):
+            f.unlink(missing_ok=True)
+
+
 @main.command()
 def start():
-    """Launch EyeClaude (webcam + eye tracking + pipe listener + overlay)."""
+    """Launch EyeClaude with auto-discovery and visual calibration."""
     config = load_config()
     state = SharedState()
     status_monitor = StatusMonitor(state, flash_duration_ms=config.finished_flash_duration_ms)
 
-    # Start pipe server first so terminals can register before calibration
+    # Install hooks globally (idempotent)
+    _install_claude_hooks()
+    click.echo("Claude Code status hooks verified.")
+
+    # Install statusline wrapper
+    _install_statusline()
+
+    # Start pipe server for status messages
     pipe_server = PipeServer(state)
     original_handle = pipe_server.handle_message
 
     def handle_with_monitor(msg):
         original_handle(msg)
         if msg.type == "status":
-            from eyeclaude.shared_state import InstanceStatus
             status_map = {"idle": InstanceStatus.IDLE, "working": InstanceStatus.WORKING,
                           "finished": InstanceStatus.FINISHED, "error": InstanceStatus.ERROR}
             new_status = status_map.get(msg.state, InstanceStatus.IDLE)
-            # Resolve the pid from window_handle for the status monitor
             if msg.window_handle:
                 terminal = state.get_terminal_by_hwnd(msg.window_handle)
                 if terminal:
@@ -61,46 +138,44 @@ def start():
                 status_monitor.on_status_change(pid=msg.pid, new_status=new_status)
 
     pipe_server.handle_message = handle_with_monitor
-
-    # Start pipe server so terminals can register
     pipe_server.start()
     click.echo(f"Listening on pipe: {PIPE_NAME}")
-    click.echo("Register your terminals now with '/eyeclaude-register' in each one.")
-    click.echo("Press ENTER here when all terminals are registered to start calibration...")
-    input()
 
-    # Calibrate using the registered terminal windows
-    calibration = load_calibration()
-    terminals = state.get_all_terminals()
-    if terminals:
-        click.echo(f"{len(terminals)} terminal(s) registered. Starting calibration...")
-        calibration = run_calibration(webcam_index=config.webcam_index, state=state)
-        if calibration is None:
-            click.echo("Calibration failed. Exiting.")
-            pipe_server.stop()
-            return
-    elif not calibration.points:
-        click.echo("No terminals registered and no saved calibration. Running default calibration...")
-        calibration = run_calibration(webcam_index=config.webcam_index)
-        if calibration is None:
-            click.echo("Calibration failed. Exiting.")
-            pipe_server.stop()
-            return
+    # Auto-discover terminals and register them
+    from eyeclaude.terminal_discovery import discover_terminals
+    discovered = discover_terminals()
+    click.echo(f"Found {len(discovered)} terminal window(s).")
+    for t in discovered:
+        quadrant = _assign_quadrant_by_position(t.hwnd)
+        state.register_terminal(pid=t.hwnd, window_handle=t.hwnd, quadrant=quadrant)
+        click.echo(f"  Registered: {t.title} ({quadrant.value})")
 
+    # Run visual calibration overlay
+    from eyeclaude.calibration_overlay import CalibrationOverlay
+    click.echo("Opening calibration overlay...")
+    overlay_app = CalibrationOverlay(webcam_index=config.webcam_index)
+    calibration = overlay_app.run()
+
+    if calibration is None:
+        click.echo("Calibration cancelled or failed. Exiting.")
+        pipe_server.stop()
+        _restore_statusline()
+        return
+
+    save_calibration(calibration)
+    click.echo(f"Calibration saved — {len(calibration.points)} quadrants.")
+
+    # Start eye tracking
     eye_tracker = EyeTracker(
         state=state,
         calibration=calibration,
         dwell_time_ms=config.dwell_time_ms,
         webcam_index=config.webcam_index,
     )
-    overlay = Overlay(state=state)
     window_manager = WindowManager(state)
-
     eye_tracker.start()
-    overlay.start()
 
     click.echo("EyeClaude started. Press Ctrl+C to stop.")
-    click.echo(f"Tracking {len(calibration.points)} quadrants.")
 
     stop_event = threading.Event()
 
@@ -110,21 +185,22 @@ def start():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # Main loop: update focus + status monitor tick + title updates
+    # Main loop
     try:
         while not stop_event.is_set() and not state.shutdown_requested:
             active = state.active_quadrant
             window_manager.update_focus(active)
             status_monitor.tick()
-            overlay.update()
+            _update_active_status_files(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
 
     click.echo("\nShutting down...")
     eye_tracker.stop()
-    overlay.stop()
     pipe_server.stop()
+    _cleanup_status_files()
+    _restore_statusline()
     click.echo("EyeClaude stopped.")
 
 
@@ -136,15 +212,22 @@ def stop():
         click.echo("Stop signal sent.")
     except Exception as e:
         click.echo(f"Could not connect to EyeClaude: {e}")
+    _remove_claude_hooks()
+    _restore_statusline()
+    _cleanup_status_files()
+    click.echo("Hooks removed, statusline restored, status files cleaned up.")
 
 
 @main.command()
 def calibrate():
-    """Run or re-run eye tracking calibration."""
+    """Run or re-run eye tracking calibration using the visual overlay."""
     config = load_config()
-    click.echo("Starting calibration...")
-    result = run_calibration(webcam_index=config.webcam_index)
+    click.echo("Opening calibration overlay...")
+    from eyeclaude.calibration_overlay import CalibrationOverlay
+    overlay_app = CalibrationOverlay(webcam_index=config.webcam_index)
+    result = overlay_app.run()
     if result:
+        save_calibration(result)
         click.echo(f"Calibration saved to {DEFAULT_CALIBRATION_PATH}")
     else:
         click.echo("Calibration cancelled.")
@@ -196,80 +279,6 @@ def config_cmd(dwell_time, border_thickness, webcam_index):
 
     save_config(cfg)
     click.echo(f"Configuration saved to {DEFAULT_CONFIG_PATH}")
-
-
-@main.command()
-@click.option("--all", "register_all", is_flag=True, help="Register all visible Windows Terminal windows")
-@click.option("--hwnd", type=int, default=None, help="Register a specific window handle")
-def register(register_all, hwnd):
-    """Register terminal(s) with EyeClaude and install Claude Code hooks."""
-    import win32gui
-
-    if register_all:
-        terminals = _find_all_terminal_windows()
-        if not terminals:
-            click.echo("No Windows Terminal windows found.")
-            return
-        for h in terminals:
-            _register_one_window(h)
-    elif hwnd:
-        _register_one_window(hwnd)
-    else:
-        # Fallback: use foreground window
-        hwnd = win32gui.GetForegroundWindow()
-        if not hwnd:
-            click.echo("Error: Could not determine terminal window handle.")
-            return
-        _register_one_window(hwnd)
-
-    _install_claude_hooks()
-    click.echo("Claude Code status hooks installed.")
-
-
-def _register_one_window(hwnd: int) -> None:
-    """Register a single window with EyeClaude."""
-    import win32gui
-    try:
-        _send_pipe_message({
-            "type": "register",
-            "window_handle": hwnd,
-            "pid": hwnd,  # Use hwnd as unique ID (PID is shared across WT windows)
-        })
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        click.echo(f"Registered HWND={hwnd} at ({left},{top})-({right},{bottom})")
-    except Exception as e:
-        click.echo(f"Failed to register HWND={hwnd}: {e}. Is EyeClaude running?")
-
-
-def _find_all_terminal_windows() -> list[int]:
-    """Find all visible Windows Terminal (CASCADIA) windows."""
-    import win32gui
-    terminals = []
-    def callback(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd):
-            if "CASCADIA" in win32gui.GetClassName(hwnd).upper():
-                terminals.append(hwnd)
-        return True
-    win32gui.EnumWindows(callback, None)
-    return terminals
-
-
-@main.command()
-def unregister():
-    """Unregister the current terminal from EyeClaude and remove hooks."""
-    import os
-    import win32console
-
-    hwnd = win32console.GetConsoleWindow()
-    pid = os.getpid()
-    try:
-        _send_pipe_message({"type": "unregister", "pid": pid})
-        click.echo(f"Unregistered from EyeClaude (pid={pid})")
-    except Exception as e:
-        click.echo(f"Failed to unregister: {e}. Is EyeClaude running?")
-
-    _remove_claude_hooks()
-    click.echo("Claude Code status hooks removed.")
 
 
 def _send_pipe_message(data: dict) -> None:
