@@ -85,7 +85,7 @@ class CalibrationOverlay:
     BG_OPACITY = 0.7
     POLL_INTERVAL_MS = 100
     GAZE_INTERVAL_MS = 33
-    SMOOTHING_FACTOR = 0.3  # 0 = no smoothing, 1 = no movement
+    SMOOTHING_FACTOR = 0.7  # 0 = no smoothing, 1 = no movement
 
     def __init__(self, webcam_index: int = 0):
         self._webcam_index = webcam_index
@@ -307,12 +307,10 @@ class CalibrationOverlay:
 
         if self._bound_step_index >= len(BOUND_STEPS):
             self._bounds_done = True
-            # Detect if axes are inverted by comparing to center
-            # If "left" gaze_x > center_x, then X axis is inverted
-            cx = self._bounds.get("center_x", 0.5)
-            cy = self._bounds.get("center_y", 0.5)
-            self._x_inverted = self._bounds.get("left", cx) > cx
-            self._y_inverted = self._bounds.get("top", cy) > cy
+            # Both axes are inverted due to flipped webcam + amplified iris math:
+            # looking left → higher gaze_x, looking up → higher gaze_y
+            self._x_inverted = True
+            self._y_inverted = True
             self._set_status(BOUND_DONE_MSG)
             self._update_edge_marker()
         else:
@@ -373,10 +371,11 @@ class CalibrationOverlay:
         screen_h = self._screen_h
 
         if not self._bounds_done:
-            # Before calibration, rough mapping. X is inverted because the
-            # flipped webcam frame makes looking-left produce higher gaze_x.
+            # Before calibration, rough mapping. Both axes are inverted:
+            # flipped webcam + amplified iris offset = looking-left gives higher X,
+            # looking-up gives higher Y.
             sx = int((1.0 - gaze_x) * screen_w)
-            sy = int(gaze_y * screen_h)
+            sy = int((1.0 - gaze_y) * screen_h)
         else:
             bnd_left = self._bounds["left"]
             bnd_right = self._bounds["right"]
