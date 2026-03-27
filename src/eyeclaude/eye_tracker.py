@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 LEFT_IRIS_CENTER = 468
 RIGHT_IRIS_CENTER = 473
 
+# Eye corner landmarks for relative gaze calculation
+# Left eye (from camera's perspective)
+LEFT_EYE_OUTER = 33
+LEFT_EYE_INNER = 133
+LEFT_EYE_TOP = 159
+LEFT_EYE_BOTTOM = 145
+
+# Right eye (from camera's perspective)
+RIGHT_EYE_OUTER = 362
+RIGHT_EYE_INNER = 263
+RIGHT_EYE_TOP = 386
+RIGHT_EYE_BOTTOM = 374
+
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 MODEL_DIR = Path.home() / ".eyeclaude"
 MODEL_PATH = MODEL_DIR / "face_landmarker.task"
@@ -89,11 +102,31 @@ class DwellTracker:
 
 
 def _get_iris_center(landmarks) -> tuple[float, float] | None:
-    """Extract averaged iris center from both eyes."""
+    """Extract gaze direction using nose tip + iris offset.
+
+    Pure iris tracking gives too small a signal (~0.05 range). Instead we
+    combine head pose (nose tip position) with the iris-to-nose offset.
+    When you look at screen corners you both move your eyes AND slightly
+    turn your head, so this combined signal is much stronger.
+
+    Returns (x, y) where the values represent relative gaze direction.
+    """
     try:
-        left = landmarks[LEFT_IRIS_CENTER]
-        right = landmarks[RIGHT_IRIS_CENTER]
-        return ((left.x + right.x) / 2, (left.y + right.y) / 2)
+        # Nose tip (landmark 1) tracks head pose well
+        nose = landmarks[1]
+
+        # Average iris position
+        l_iris = landmarks[LEFT_IRIS_CENTER]
+        r_iris = landmarks[RIGHT_IRIS_CENTER]
+        iris_x = (l_iris.x + r_iris.x) / 2
+        iris_y = (l_iris.y + r_iris.y) / 2
+
+        # Combine: nose gives head direction, iris offset adds eye movement
+        # Weight nose more since it has a larger signal
+        gaze_x = nose.x * 0.7 + iris_x * 0.3
+        gaze_y = nose.y * 0.7 + iris_y * 0.3
+
+        return (gaze_x, gaze_y)
     except (IndexError, AttributeError):
         return None
 
