@@ -114,9 +114,6 @@ def start():
     _install_claude_hooks()
     click.echo("Claude Code status hooks verified.")
 
-    # Install statusline wrapper
-    _install_statusline()
-
     # Start pipe server for status messages
     pipe_server = PipeServer(state)
     original_handle = pipe_server.handle_message
@@ -156,7 +153,6 @@ def start():
     if calibration is None:
         click.echo("Calibration cancelled or failed. Exiting.")
         pipe_server.stop()
-        _restore_statusline()
         return
 
     save_calibration(calibration)
@@ -197,7 +193,6 @@ def start():
     eye_tracker.stop()
     pipe_server.stop()
     _cleanup_status_files()
-    _restore_statusline()
     click.echo("EyeClaude stopped.")
 
 
@@ -210,9 +205,8 @@ def stop():
     except Exception as e:
         click.echo(f"Could not connect to EyeClaude: {e}")
     _remove_claude_hooks()
-    _restore_statusline()
     _cleanup_status_files()
-    click.echo("Hooks removed, statusline restored, status files cleaned up.")
+    click.echo("Hooks removed, status files cleaned up.")
 
 
 @main.command()
