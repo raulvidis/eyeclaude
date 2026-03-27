@@ -96,11 +96,15 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
     cv2.imshow(window_name, canvas)
     cv2.waitKey(100)
 
-    # Force the OpenCV window to the foreground on Windows 11
-    import win32gui
-    hwnd = win32gui.FindWindow(None, window_name)
-    if hwnd:
-        win32gui.SetForegroundWindow(hwnd)
+    # Try to bring the OpenCV window to the foreground on Windows 11
+    try:
+        import win32gui
+        hwnd = win32gui.FindWindow(None, window_name)
+        if hwnd:
+            win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+            win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        pass  # Window focus is nice-to-have, not critical
 
     options = mp.tasks.vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
