@@ -377,12 +377,15 @@ class CalibrationOverlay:
             sx = int((1.0 - gaze_x) * screen_w)
             sy = int((1.0 - gaze_y) * screen_h)
         else:
+            # Bounds are recorded as raw gaze values when looking at each edge.
+            # The mapping is: left_bound → screen 0, right_bound → screen 1.
+            # This works regardless of whether the axis is inverted, because
+            # the bounds themselves encode the direction.
             bnd_left = self._bounds["left"]
             bnd_right = self._bounds["right"]
             bnd_top = self._bounds["top"]
             bnd_bottom = self._bounds["bottom"]
 
-            # Normalize gaze into the recorded bound range
             x_range = bnd_right - bnd_left
             y_range = bnd_bottom - bnd_top
             if abs(x_range) < 0.001:
@@ -392,13 +395,6 @@ class CalibrationOverlay:
 
             norm_x = (gaze_x - bnd_left) / x_range
             norm_y = (gaze_y - bnd_top) / y_range
-
-            # If axis is inverted (looking left gives higher gaze value),
-            # flip the normalized value so screen-left = 0, screen-right = 1
-            if self._x_inverted:
-                norm_x = 1.0 - norm_x
-            if self._y_inverted:
-                norm_y = 1.0 - norm_y
 
             sx = int(norm_x * screen_w)
             sy = int(norm_y * screen_h)
@@ -561,18 +557,13 @@ class CalibrationOverlay:
         data = CalibrationData()
         for tr in self._terminal_rects:
             quadrant = _assign_quadrant_by_position(tr.hwnd)
-            # Map terminal center (screen coords) to normalized [0,1]
+            # Map terminal center (screen coords) to gaze space.
+            # Bounds encode direction naturally (left_bound maps to screen 0,
+            # right_bound maps to screen 1), so no inversion needed.
             cx = (tr.left + tr.right) / 2
             cy = (tr.top + tr.bottom) / 2
             norm_x = cx / screen_w
             norm_y = cy / screen_h
-
-            # Invert normalized value if axis is flipped, then map to gaze space
-            if self._x_inverted:
-                norm_x = 1.0 - norm_x
-            if self._y_inverted:
-                norm_y = 1.0 - norm_y
-
             gaze_x = bnd_left + norm_x * x_range
             gaze_y = bnd_top + norm_y * y_range
             data.points[quadrant] = (gaze_x, gaze_y)
