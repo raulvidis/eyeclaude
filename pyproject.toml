@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 eyeclaude = "eyeclaude.cli:main"
+eyeclaude-hooks = "eyeclaude.hooks:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
