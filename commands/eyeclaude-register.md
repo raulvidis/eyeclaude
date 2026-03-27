@@ -1,6 +1,12 @@
-Register all terminal windows with EyeClaude for eye-tracking focus management.
+Register this terminal with EyeClaude for eye-tracking focus management.
 
-Run the following command to register all visible Windows Terminal windows at once and install status hooks:
+Run the following command to register this terminal and install status hooks:
+
+```bash
+eyeclaude register
+```
+
+If you want to register all visible terminal windows at once instead, run:
 
 ```bash
 eyeclaude register --all
