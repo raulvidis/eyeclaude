@@ -83,7 +83,24 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
 
     window_name = "EyeClaude Calibration"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # Move and resize to fill the screen, then set topmost + fullscreen
+    cv2.moveWindow(window_name, 0, 0)
+    cv2.resizeWindow(window_name, screen_w, screen_h)
+    cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    # Show an initial black frame to make the window appear
+    canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+    cv2.putText(canvas, "Initializing webcam...", (screen_w // 2 - 200, screen_h // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    cv2.imshow(window_name, canvas)
+    cv2.waitKey(100)
+
+    # Force the OpenCV window to the foreground on Windows 11
+    import win32gui
+    hwnd = win32gui.FindWindow(None, window_name)
+    if hwnd:
+        win32gui.SetForegroundWindow(hwnd)
 
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
