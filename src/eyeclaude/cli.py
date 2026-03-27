@@ -77,11 +77,7 @@ def start():
         dwell_time_ms=config.dwell_time_ms,
         webcam_index=config.webcam_index,
     )
-    overlay = Overlay(
-        state=state,
-        border_colors=config.border_colors,
-        border_thickness=config.border_thickness_px,
-    )
+    overlay = Overlay(state=state)
     window_manager = WindowManager(state)
 
     # Start all components
@@ -101,12 +97,13 @@ def start():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    # Main loop: update focus + status monitor tick
+    # Main loop: update focus + status monitor tick + title updates
     try:
         while not stop_event.is_set() and not state.shutdown_requested:
             active = state.active_quadrant
             window_manager.update_focus(active)
             status_monitor.tick()
+            overlay.update()
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
