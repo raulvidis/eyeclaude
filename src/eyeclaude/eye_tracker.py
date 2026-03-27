@@ -5,6 +5,9 @@ import math
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import urllib.request
 
 import cv2
 import mediapipe as mp
@@ -13,9 +16,23 @@ from eyeclaude.shared_state import Quadrant, SharedState
 
 logger = logging.getLogger(__name__)
 
-# MediaPipe iris landmark indices (refine_landmarks=True required)
+# MediaPipe iris landmark indices
 LEFT_IRIS_CENTER = 468
 RIGHT_IRIS_CENTER = 473
+
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+MODEL_DIR = Path.home() / ".eyeclaude"
+MODEL_PATH = MODEL_DIR / "face_landmarker.task"
+
+
+def ensure_model() -> str:
+    """Download the FaceLandmarker model if not present. Returns path."""
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    if not MODEL_PATH.exists():
+        logger.info("Downloading FaceLandmarker model...")
+        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        logger.info("Model saved to %s", MODEL_PATH)
+    return str(MODEL_PATH)
 
 
 @dataclass
@@ -117,14 +134,17 @@ class EyeTracker:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        mp_face_mesh = mp.solutions.face_mesh
-
-        with mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
+        model_path = ensure_model()
+        options = mp.tasks.vision.FaceLandmarkerOptions(
+            base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+            running_mode=mp.tasks.vision.RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
             min_tracking_confidence=0.5,
-        ) as face_mesh:
+        )
+        landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+
+        try:
             while self._running:
                 ret, frame = cap.read()
                 if not ret:
@@ -132,11 +152,12 @@ class EyeTracker:
 
                 frame = cv2.flip(frame, 1)  # Mirror for natural feel
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = landmarker.detect(mp_image)
 
                 gaze = None
-                if results.multi_face_landmarks:
-                    landmarks = results.multi_face_landmarks[0].landmark
+                if result.face_landmarks:
+                    landmarks = result.face_landmarks[0]
                     gaze = _get_iris_center(landmarks)
 
                 timestamp_ms = time.monotonic() * 1000
@@ -147,5 +168,6 @@ class EyeTracker:
                 activated = self._dwell.update(quadrant, timestamp_ms)
                 if activated:
                     self._state.active_quadrant = activated
-
-        cap.release()
+        finally:
+            landmarker.close()
+            cap.release()

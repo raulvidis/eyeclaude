@@ -8,7 +8,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from eyeclaude.eye_tracker import CalibrationData, _get_iris_center
+from eyeclaude.eye_tracker import CalibrationData, _get_iris_center, ensure_model
 from eyeclaude.shared_state import Quadrant
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    mp_face_mesh = mp.solutions.face_mesh
+    model_path = ensure_model()
     calibration = CalibrationData()
 
     window_name = "EyeClaude Calibration"
@@ -102,13 +102,16 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
     if hwnd:
         win32gui.SetForegroundWindow(hwnd)
 
-    with mp_face_mesh.FaceMesh(
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
+    options = mp.tasks.vision.FaceLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+        running_mode=mp.tasks.vision.RunningMode.IMAGE,
+        num_faces=1,
+        min_face_detection_confidence=0.5,
         min_tracking_confidence=0.5,
-    ) as face_mesh:
+    )
+    landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
+    try:
         for quadrant in QUADRANT_ORDER:
             dot_x, dot_y = _quadrant_screen_center(quadrant, screen_w, screen_h)
             label = QUADRANT_LABELS[quadrant]
@@ -121,7 +124,8 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
 
                 frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_mesh.process(rgb)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                result = landmarker.detect(mp_image)
 
                 # Draw calibration screen
                 canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
@@ -135,6 +139,12 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
                     if q == quadrant:
                         color = (0, 255, 0)
                     cv2.circle(canvas, (dx, dy), 20, color, -1)
+
+                # Show face detection status
+                face_status = "Face detected" if result.face_landmarks else "No face - look at webcam"
+                status_color = (0, 255, 0) if result.face_landmarks else (0, 0, 255)
+                cv2.putText(canvas, face_status, (screen_w // 2 - 150, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
 
                 # Instructions
                 cv2.putText(
@@ -156,11 +166,12 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
                 if key == 27:  # ESC
                     cap.release()
                     cv2.destroyAllWindows()
+                    landmarker.close()
                     return None
 
                 if key == 32:  # SPACE
-                    if results.multi_face_landmarks:
-                        landmarks = results.multi_face_landmarks[0].landmark
+                    if result.face_landmarks:
+                        landmarks = result.face_landmarks[0]
                         iris_pos = _get_iris_center(landmarks)
                         if iris_pos:
                             calibration.points[quadrant] = iris_pos
@@ -170,6 +181,8 @@ def run_calibration(webcam_index: int = 0) -> CalibrationData | None:
                             logger.warning("No iris detected — try again")
                     else:
                         logger.warning("No face detected — try again")
+    finally:
+        landmarker.close()
 
     cap.release()
     cv2.destroyAllWindows()
