@@ -95,9 +95,15 @@ class CalibrationOverlay:
         # Gaze tracking thread
         self._gaze_thread: threading.Thread | None = None
         self._gaze_lock = threading.Lock()
+        # Webcam + landmarker opened on main thread, read from gaze thread
+        self._cap = None
+        self._landmarker = None
 
     def run(self) -> CalibrationData | None:
         """Open the overlay, run calibration, return results. Blocks until closed."""
+        import cv2
+        import mediapipe as mp_lib
+
         self._running = True
 
         # Discover terminals
@@ -114,7 +120,45 @@ class CalibrationOverlay:
             for i, t in enumerate(discovered)
         ]
 
-        # Start gaze tracking thread
+        # Open webcam on main thread — Windows DirectShow/MSMF backends
+        # can fail to read frames when opened from a non-main thread.
+        try:
+            model_path = ensure_model()
+        except Exception as e:
+            logger.error("Model download failed: %s", e)
+            return None
+
+        self._cap = cv2.VideoCapture(self._webcam_index)
+        if not self._cap.isOpened():
+            logger.error("Cannot open webcam %d", self._webcam_index)
+            return None
+
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        try:
+            options = mp_lib.tasks.vision.FaceLandmarkerOptions(
+                base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
+                running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=0.3,
+                min_tracking_confidence=0.3,
+            )
+            self._landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
+        except Exception as e:
+            logger.error("MediaPipe init failed: %s", e)
+            self._cap.release()
+            return None
+
+        # Verify we can actually read a frame
+        ret, _ = self._cap.read()
+        if not ret:
+            logger.error("Webcam opened but cannot read frames")
+            self._landmarker.close()
+            self._cap.release()
+            return None
+
+        # Start gaze tracking thread (webcam already open)
         self._gaze_thread = threading.Thread(target=self._gaze_loop, daemon=True)
         self._gaze_thread.start()
 
@@ -124,6 +168,9 @@ class CalibrationOverlay:
 
         # Cleanup
         self._running = False
+        time.sleep(0.1)  # Let gaze thread exit
+        self._landmarker.close()
+        self._cap.release()
 
         # Convert results to CalibrationData using quadrant assignment
         return self._build_calibration_data()
@@ -342,40 +389,12 @@ class CalibrationOverlay:
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
 
     def _gaze_loop(self) -> None:
-        """Background thread: capture webcam and compute gaze position."""
+        """Background thread: read frames from pre-opened webcam and compute gaze."""
         import cv2
         import mediapipe as mp_lib
 
-        try:
-            model_path = ensure_model()
-        except Exception as e:
-            with self._gaze_lock:
-                self._camera_error = f"Model download failed: {e}"
-            return
-
-        cap = cv2.VideoCapture(self._webcam_index)
-        if not cap.isOpened():
-            with self._gaze_lock:
-                self._camera_error = f"Cannot open webcam {self._webcam_index}"
-            return
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-        try:
-            options = mp_lib.tasks.vision.FaceLandmarkerOptions(
-                base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
-                running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
-                num_faces=1,
-                min_face_detection_confidence=0.3,
-                min_tracking_confidence=0.3,
-            )
-            landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
-        except Exception as e:
-            with self._gaze_lock:
-                self._camera_error = f"MediaPipe init failed: {e}"
-            cap.release()
-            return
+        cap = self._cap
+        landmarker = self._landmarker
 
         try:
             while self._running:
@@ -417,9 +436,6 @@ class CalibrationOverlay:
             logger.error("Gaze loop error: %s", e)
             with self._gaze_lock:
                 self._camera_error = f"Tracking error: {e}"
-        finally:
-            landmarker.close()
-            cap.release()
 
     def _update_rect_styles(self) -> None:
         """Update rectangle colors based on selection/recording/calibrated state."""
