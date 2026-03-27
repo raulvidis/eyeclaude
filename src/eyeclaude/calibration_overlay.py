@@ -307,14 +307,18 @@ class CalibrationOverlay:
         else:  # top, bottom
             self._bounds[step] = median_y
 
+        # Log the recorded value
+        logger.info("Bound %s: median_x=%.4f median_y=%.4f", step, median_x, median_y)
+
         self._bound_step_index += 1
 
         if self._bound_step_index >= len(BOUND_STEPS):
             self._bounds_done = True
-            # Both axes are inverted due to flipped webcam + amplified iris math:
-            # looking left → higher gaze_x, looking up → higher gaze_y
             self._x_inverted = True
             self._y_inverted = True
+            logger.info("Bounds: left=%.4f right=%.4f top=%.4f bottom=%.4f",
+                        self._bounds["left"], self._bounds["right"],
+                        self._bounds["top"], self._bounds["bottom"])
             self._set_status(BOUND_DONE_MSG)
             self._update_edge_marker()
         else:
@@ -401,6 +405,13 @@ class CalibrationOverlay:
 
             sx = int(norm_x * screen_w)
             sy = int(norm_y * screen_h)
+
+        # Periodic debug output (every ~1s at 30fps)
+        if not hasattr(self, '_debug_counter'):
+            self._debug_counter = 0
+        self._debug_counter += 1
+        if self._debug_counter % 30 == 0 and self._bounds_done:
+            print(f"  gaze=({gaze_x:.3f},{gaze_y:.3f}) norm=({norm_x:.2f},{norm_y:.2f}) screen=({sx},{sy})")
 
         return (max(0, min(screen_w, sx)), max(0, min(screen_h, sy)))
 
