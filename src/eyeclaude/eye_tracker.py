@@ -119,20 +119,17 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         l_iris = landmarks[LEFT_IRIS_CENTER]
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         iris_x = (l_iris.x + r_iris.x) / 2
-        iris_y = (l_iris.y + r_iris.y) / 2
 
-        # Iris offset from nose — this is the eye movement signal
-        # Even small eye movements produce a detectable offset
+        # X: iris offset from nose (amplified) — eye movement is the main
+        # horizontal signal, head turns add via nose.x baseline
         offset_x = iris_x - nose.x
-        offset_y = iris_y - nose.y
-
-        # Amplify the offset to make small eye movements matter more.
-        # Y gets higher amplification because vertical eye/head movement
-        # is naturally smaller than horizontal.
         amp_x = 8.0
-        amp_y = 12.0
         gaze_x = nose.x + offset_x * amp_x
-        gaze_y = nose.y + offset_y * amp_y
+
+        # Y: nose position only — vertical gaze is dominated by head tilt,
+        # not iris movement (iris barely moves up/down in the socket).
+        # nose.y tracks head tilt naturally in 0-1 image space.
+        gaze_y = nose.y
 
         return (gaze_x, gaze_y)
     except (IndexError, AttributeError):
