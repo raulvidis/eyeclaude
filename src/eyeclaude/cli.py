@@ -19,6 +19,7 @@ from eyeclaude.eye_tracker import EyeTracker
 from eyeclaude.pipe_server import PipeServer, PIPE_NAME, _assign_quadrant_by_position
 from eyeclaude.shared_state import SharedState, InstanceStatus
 from eyeclaude.status_monitor import StatusMonitor
+from eyeclaude.overlay import Overlay
 from eyeclaude.window_manager import WindowManager
 
 logger = logging.getLogger("eyeclaude")
@@ -158,7 +159,10 @@ def start():
     save_calibration(calibration)
     click.echo(f"Calibration saved — {len(calibration.points)} quadrants.")
 
-    # Start eye tracking
+    # Brief pause to let webcam fully release from calibration overlay
+    time.sleep(0.5)
+
+    # Start eye tracking (webcam opened on main thread)
     eye_tracker = EyeTracker(
         state=state,
         calibration=calibration,
@@ -166,7 +170,9 @@ def start():
         webcam_index=config.webcam_index,
     )
     window_manager = WindowManager(state)
+    overlay = Overlay(state=state)
     eye_tracker.start()
+    overlay.start()
 
     click.echo("EyeClaude started. Press Ctrl+C to stop.")
 
@@ -184,6 +190,7 @@ def start():
             active = state.active_quadrant
             window_manager.update_focus(active)
             status_monitor.tick()
+            overlay.update()
             _update_active_status_files(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
@@ -191,6 +198,7 @@ def start():
 
     click.echo("\nShutting down...")
     eye_tracker.stop()
+    overlay.stop()
     pipe_server.stop()
     _cleanup_status_files()
     click.echo("EyeClaude stopped.")

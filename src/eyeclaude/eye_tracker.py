@@ -152,25 +152,18 @@ class EyeTracker:
         self._webcam_index = webcam_index
         self._running = False
         self._thread: threading.Thread | None = None
+        self._cap = None
+        self._landmarker = None
 
     def start(self) -> None:
-        self._running = True
-        self._thread = threading.Thread(target=self._track_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=3)
-
-    def _track_loop(self) -> None:
-        cap = cv2.VideoCapture(self._webcam_index)
-        if not cap.isOpened():
+        """Open webcam on main thread, then start tracking in background."""
+        self._cap = cv2.VideoCapture(self._webcam_index)
+        if not self._cap.isOpened():
             logger.error("Cannot open webcam %d", self._webcam_index)
             return
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
         model_path = ensure_model()
         options = mp.tasks.vision.FaceLandmarkerOptions(
@@ -180,15 +173,33 @@ class EyeTracker:
             min_face_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
-        landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+        self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+
+        self._running = True
+        self._thread = threading.Thread(target=self._track_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3)
+        if self._landmarker:
+            self._landmarker.close()
+        if self._cap:
+            self._cap.release()
+
+    def _track_loop(self) -> None:
+        cap = self._cap
+        landmarker = self._landmarker
 
         try:
             while self._running:
                 ret, frame = cap.read()
                 if not ret:
+                    time.sleep(0.01)
                     continue
 
-                frame = cv2.flip(frame, 1)  # Mirror for natural feel
+                frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 result = landmarker.detect(mp_image)
@@ -206,6 +217,5 @@ class EyeTracker:
                 activated = self._dwell.update(quadrant, timestamp_ms)
                 if activated:
                     self._state.active_quadrant = activated
-        finally:
-            landmarker.close()
-            cap.release()
+        except Exception as e:
+            logger.error("Eye tracker error: %s", e)
