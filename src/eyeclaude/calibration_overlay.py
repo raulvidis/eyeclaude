@@ -82,7 +82,7 @@ class CalibrationOverlay:
     BG_OPACITY = 0.7
     POLL_INTERVAL_MS = 100
     GAZE_INTERVAL_MS = 33
-    SMOOTHING_FACTOR = 0.7  # 0 = no smoothing, 1 = no movement
+    SMOOTHING_FACTOR = 0.85  # 0 = no smoothing, 1 = no movement
 
     def __init__(self, webcam_index: int = 0):
         self._webcam_index = webcam_index
