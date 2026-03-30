@@ -11,15 +11,12 @@ PIPE_NAME = r"\\.\pipe\eyeclaude"
 
 
 def _get_terminal_hwnd() -> int:
-    """Get the terminal window handle, falling back to foreground window."""
-    try:
-        import win32console
-        hwnd = win32console.GetConsoleWindow()
-        if hwnd:
-            return hwnd
-    except Exception:
-        pass
-    # Fallback: foreground window (works when called from Claude Code hooks)
+    """Get the terminal window handle.
+
+    Uses GetForegroundWindow — when Claude Code runs a hook, the terminal
+    window is in the foreground. This returns the CASCADIA top-level HWND
+    which matches what discover_terminals() registers.
+    """
     try:
         import win32gui
         return win32gui.GetForegroundWindow()

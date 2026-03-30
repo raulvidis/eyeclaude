@@ -97,16 +97,11 @@ def _update_active_status_files(state: SharedState) -> None:
     status_dir.mkdir(parents=True, exist_ok=True)
     active_quad = state.active_quadrant
 
-    # Update per-terminal JSON files
+    # Update per-terminal JSON files — always write current status from state
     for terminal in state.get_all_terminals():
         status_file = status_dir / f"{terminal.window_handle}.json"
-        is_active = terminal.quadrant == active_quad
+        data = {"status": terminal.status.value, "active": terminal.quadrant == active_quad}
         try:
-            if status_file.exists():
-                data = json.loads(status_file.read_text(encoding="utf-8"))
-                data["active"] = is_active
-            else:
-                data = {"status": terminal.status.value, "active": is_active}
             status_file.write_text(json.dumps(data), encoding="utf-8")
         except Exception:
             pass
