@@ -120,10 +120,8 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         iris_x = (l_iris.x + r_iris.x) / 2
 
-        # X: iris offset from nose (amplified).
-        # Looking left → iris moves left in flipped frame → iris_x < nose.x
-        # → offset negative → gaze_x decreases → maps to screen left ✓
-        offset_x = iris_x - nose.x
+        # X: iris offset from nose (amplified, negated to match head direction).
+        offset_x = nose.x - iris_x
         amp_x = 8.0
         gaze_x = nose.x + offset_x * amp_x
 
