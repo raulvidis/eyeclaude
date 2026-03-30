@@ -34,7 +34,12 @@ def main():
 
 
 def _install_statusline():
-    """Replace ccstatusline with eyeclaude-statusline wrapper in settings.json."""
+    """Add EyeClaude indicator to statusline via shell one-liner.
+
+    Reads a tiny indicator file and prepends it to ccstatusline output.
+    No Python wrapper, no subprocess — just shell + npx in the same context
+    where ccstatusline was already working.
+    """
     settings_path = Path.home() / ".claude" / "settings.json"
     if not settings_path.exists():
         return
@@ -48,9 +53,17 @@ def _install_statusline():
     if "statusLine" in settings:
         backup_path.write_text(json.dumps(settings["statusLine"]), encoding="utf-8")
 
-    # Use the same Python interpreter to run the wrapper module directly.
-    # This avoids PATH issues with pip-installed scripts on Windows.
-    cmd = f'"{sys.executable}" -m eyeclaude.statusline_wrapper'
+    # Shell one-liner: read indicator file, pipe stdin to ccstatusline, combine
+    indicator_dir = Path.home() / ".eyeclaude" / "status"
+    indicator_dir_str = str(indicator_dir).replace("\\", "/")
+    cmd = (
+        f'bash -c \'INPUT=$(cat); '
+        f'IND=$(cat "{indicator_dir_str}/indicator" 2>/dev/null || echo ""); '
+        f'OUT=$(echo "$INPUT" | npx -y ccstatusline@latest 2>/dev/null); '
+        f'if [ -n "$IND" ] && [ -n "$OUT" ]; then echo "$IND $OUT"; '
+        f'elif [ -n "$IND" ]; then echo "$IND"; '
+        f'elif [ -n "$OUT" ]; then echo "$OUT"; fi\''
+    )
 
     settings["statusLine"] = {
         "type": "command",
@@ -58,7 +71,7 @@ def _install_statusline():
         "padding": 0,
     }
     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-    click.echo("Statusline wrapper installed.")
+    click.echo("Statusline indicator installed.")
 
 
 def _restore_statusline():
@@ -79,20 +92,43 @@ def _restore_statusline():
 
 
 def _update_active_status_files(state: SharedState) -> None:
-    """Update the active flag in all terminal status files."""
+    """Update per-terminal status files and the statusline indicator file."""
     status_dir = Path.home() / ".eyeclaude" / "status"
-    if not status_dir.exists():
-        return
+    status_dir.mkdir(parents=True, exist_ok=True)
     active_quad = state.active_quadrant
+
+    # Update per-terminal JSON files
     for terminal in state.get_all_terminals():
         status_file = status_dir / f"{terminal.window_handle}.json"
-        if status_file.exists():
-            try:
+        is_active = terminal.quadrant == active_quad
+        try:
+            if status_file.exists():
                 data = json.loads(status_file.read_text(encoding="utf-8"))
-                data["active"] = terminal.quadrant == active_quad
-                status_file.write_text(json.dumps(data), encoding="utf-8")
-            except Exception:
-                pass
+                data["active"] = is_active
+            else:
+                data = {"status": terminal.status.value, "active": is_active}
+            status_file.write_text(json.dumps(data), encoding="utf-8")
+        except Exception:
+            pass
+
+    # Write statusline indicator file: emoji showing active terminal's status
+    # This is read by the shell one-liner in the statusline command
+    active_terminal = state.get_terminal_for_quadrant(active_quad) if active_quad else None
+    if active_terminal:
+        status_emoji = {
+            "idle": "\U0001f7e2",       # 🟢
+            "working": "\U0001f535",     # 🔵
+            "finished": "\U0001f7e1",    # 🟡
+            "error": "\U0001f534",       # 🔴
+        }
+        emoji = status_emoji.get(active_terminal.status.value, "\U0001f7e2")
+        indicator = f"{emoji}\u25c0"  # emoji + ◀
+    else:
+        indicator = ""
+    try:
+        (status_dir / "indicator").write_text(indicator, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _cleanup_status_files() -> None:
@@ -163,6 +199,9 @@ def start():
     # Reuse webcam + landmarker from calibration overlay (avoids 30-60s reinit)
     cap, landmarker = overlay_app.get_resources()
 
+    # Install statusline indicator
+    _install_statusline()
+
     eye_tracker = EyeTracker(
         state=state,
         calibration=calibration,
@@ -174,10 +213,12 @@ def start():
     window_manager = WindowManager(state)
     eye_tracker.start()
 
-    click.echo("EyeClaude started. Press Ctrl+C to stop.")
-    click.echo("Watching for focus changes...")
+    click.echo("EyeClaude started.")
+    click.echo("  Ctrl+C = stop | F8 = pause/resume | F9 = recalibrate")
 
     stop_event = threading.Event()
+    paused = False
+    recalibrate_requested = threading.Event()
 
     def handle_signal(signum, frame):
         stop_event.set()
@@ -185,33 +226,126 @@ def start():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    # Register global hotkeys (F8=pause, F9=recalibrate)
+    import ctypes
+    import ctypes.wintypes
+
+    VK_F8 = 0x77
+    VK_F9 = 0x78
+    HOTKEY_PAUSE = 1
+    HOTKEY_RECALIBRATE = 2
+
+    try:
+        ctypes.windll.user32.RegisterHotKey(None, HOTKEY_PAUSE, 0, VK_F8)
+        ctypes.windll.user32.RegisterHotKey(None, HOTKEY_RECALIBRATE, 0, VK_F9)
+    except Exception:
+        click.echo("  Warning: Could not register global hotkeys")
+
+    def _poll_hotkeys():
+        """Check for global hotkey messages (non-blocking)."""
+        msg = ctypes.wintypes.MSG()
+        while ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0x0312, 0x0312, 0x0001):
+            if msg.message == 0x0312:  # WM_HOTKEY
+                if msg.wParam == HOTKEY_PAUSE:
+                    return "pause"
+                elif msg.wParam == HOTKEY_RECALIBRATE:
+                    return "recalibrate"
+        return None
+
     # Main loop
     last_active = None
     try:
         while not stop_event.is_set() and not state.shutdown_requested:
-            active = state.active_quadrant
-            if active != last_active:
-                if active:
-                    terminal = state.get_terminal_for_quadrant(active)
-                    title = ""
-                    if terminal:
-                        try:
-                            import win32gui
-                            title = win32gui.GetWindowText(terminal.window_handle)
-                        except Exception:
-                            pass
-                    click.echo(f"  Focus → {active.value} {title}")
-                last_active = active
-            window_manager.update_focus(active)
+            # Check hotkeys
+            hotkey = _poll_hotkeys()
+            if hotkey == "pause":
+                paused = not paused
+                if paused:
+                    click.echo("  ⏸ Tracking PAUSED (F8 to resume)")
+                else:
+                    click.echo("  ▶ Tracking RESUMED")
+            elif hotkey == "recalibrate":
+                click.echo("  Recalibrating...")
+                eye_tracker.stop()
+                # Reopen calibration overlay (reuses same webcam/landmarker)
+                from eyeclaude.calibration_overlay import CalibrationOverlay
+                recal_overlay = CalibrationOverlay(webcam_index=config.webcam_index)
+                # Need fresh webcam for recalibration
+                import cv2
+                import mediapipe as mp
+                recal_overlay._cap = cv2.VideoCapture(config.webcam_index)
+                recal_overlay._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                recal_overlay._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                model_path = str(Path.home() / ".eyeclaude" / "face_landmarker.task")
+                options = mp.tasks.vision.FaceLandmarkerOptions(
+                    base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+                    running_mode=mp.tasks.vision.RunningMode.IMAGE,
+                    num_faces=1,
+                    min_face_detection_confidence=0.3,
+                    min_tracking_confidence=0.3,
+                )
+                recal_overlay._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+                new_cal = recal_overlay.run()
+                if new_cal:
+                    calibration = new_cal
+                    save_calibration(calibration)
+                    click.echo(f"  Recalibrated — {len(calibration.points)} quadrants.")
+                    cap_new, lm_new = recal_overlay.get_resources()
+                    eye_tracker = EyeTracker(
+                        state=state, calibration=calibration,
+                        dwell_time_ms=config.dwell_time_ms,
+                        webcam_index=config.webcam_index,
+                        cap=cap_new, landmarker=lm_new,
+                    )
+                    eye_tracker.start()
+                else:
+                    click.echo("  Recalibration cancelled, resuming with old calibration.")
+                    # Reopen webcam for eye tracker
+                    cap_new = cv2.VideoCapture(config.webcam_index)
+                    cap_new.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap_new.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    lm_new = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+                    eye_tracker = EyeTracker(
+                        state=state, calibration=calibration,
+                        dwell_time_ms=config.dwell_time_ms,
+                        webcam_index=config.webcam_index,
+                        cap=cap_new, landmarker=lm_new,
+                    )
+                    eye_tracker.start()
+                continue
+
+            if not paused:
+                active = state.active_quadrant
+                if active != last_active:
+                    if active:
+                        terminal = state.get_terminal_for_quadrant(active)
+                        title = ""
+                        if terminal:
+                            try:
+                                import win32gui
+                                title = win32gui.GetWindowText(terminal.window_handle)
+                            except Exception:
+                                pass
+                        click.echo(f"  Focus → {active.value} {title}")
+                    last_active = active
+                window_manager.update_focus(active)
             status_monitor.tick()
             _update_active_status_files(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
 
+    # Cleanup hotkeys
+    try:
+        ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_PAUSE)
+        ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_RECALIBRATE)
+    except Exception:
+        pass
+
     click.echo("\nShutting down...")
     eye_tracker.stop()
     pipe_server.stop()
+    _restore_statusline()
     _cleanup_status_files()
     click.echo("EyeClaude stopped.")
 
