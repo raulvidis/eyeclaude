@@ -115,15 +115,9 @@ def _get_iris_center(landmarks) -> tuple[float, float] | None:
         # Nose tip (landmark 1) tracks head pose
         nose = landmarks[1]
 
-        # Average iris position from both eyes
-        l_iris = landmarks[LEFT_IRIS_CENTER]
-        r_iris = landmarks[RIGHT_IRIS_CENTER]
-        iris_x = (l_iris.x + r_iris.x) / 2
-
-        # X: iris offset from nose (amplified, negated to match head direction).
-        offset_x = nose.x - iris_x
-        amp_x = 8.0
-        gaze_x = nose.x + offset_x * amp_x
+        # X: nose position only (head tracking). Iris offset removed —
+        # it consistently fights the head direction in the flipped frame.
+        gaze_x = nose.x
 
         # Y: nose position only — vertical gaze is dominated by head tilt,
         # not iris movement (iris barely moves up/down in the socket).
