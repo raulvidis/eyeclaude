@@ -309,7 +309,15 @@ def start():
                     eye_tracker.start()
                 continue
 
-            if not paused:
+            if paused:
+                # Write paused indicator
+                status_dir = Path.home() / ".eyeclaude" / "status"
+                status_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    (status_dir / "indicator").write_text("\u23f8", encoding="utf-8")  # ⏸
+                except Exception:
+                    pass
+            else:
                 active = state.active_quadrant
                 if active != last_active:
                     if active:
@@ -324,8 +332,8 @@ def start():
                         click.echo(f"  Focus → {active.value} {title}")
                     last_active = active
                 window_manager.update_focus(active)
-            status_monitor.tick()
-            _update_active_status_files(state)
+                status_monitor.tick()
+                _update_active_status_files(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
