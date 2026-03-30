@@ -281,13 +281,12 @@ class CalibrationOverlay:
             brx = self._bounds["bottom_right_x"]
             bry = self._bounds["bottom_right_y"]
 
-            # cv2.flip makes looking left → higher gaze_x. So top-left corner
-            # (looking left) should have HIGHER gaze_x than bottom-right.
-            # Ensure tlx > brx for correct mapping. If not, swap.
-            if tlx < brx:
+            # Ensure top-left has lower gaze values than bottom-right.
+            # If not, swap so the linear mapping goes the right direction.
+            if tlx > brx:
                 self._bounds["top_left_x"], self._bounds["bottom_right_x"] = brx, tlx
                 print(f"  X axis swapped: {tlx:.4f} <-> {brx:.4f}")
-            if tly < bry:
+            if tly > bry:
                 self._bounds["top_left_y"], self._bounds["bottom_right_y"] = bry, tly
                 print(f"  Y axis swapped: {tly:.4f} <-> {bry:.4f}")
 
@@ -350,9 +349,8 @@ class CalibrationOverlay:
         screen_h = self._screen_h
 
         if not self._bounds_done:
-            # Before calibration, rough mapping with X inverted.
-            # cv2.flip makes looking left → higher nose.x in image space.
-            sx = int((1.0 - gaze_x) * screen_w)
+            # Before calibration, rough direct mapping.
+            sx = int(gaze_x * screen_w)
             sy = int(gaze_y * screen_h)
         else:
             # 2-point linear mapping:
