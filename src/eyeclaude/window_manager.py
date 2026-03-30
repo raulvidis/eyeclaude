@@ -2,8 +2,10 @@
 
 import logging
 
-import win32gui
+import win32api
 import win32con
+import win32gui
+import win32process
 
 from eyeclaude.shared_state import SharedState, Quadrant
 
@@ -11,11 +13,29 @@ logger = logging.getLogger(__name__)
 
 
 def set_foreground_window(hwnd: int) -> None:
-    """Attempt to bring a window to the foreground."""
+    """Bring a window to the foreground with full keyboard focus.
+
+    Uses AttachThreadInput to temporarily attach to the target window's
+    thread, which allows SetForegroundWindow to grant keyboard focus
+    even when coming back from a different application/monitor.
+    """
     try:
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        win32gui.SetForegroundWindow(hwnd)
+
+        # Attach our thread to the target window's thread so Windows
+        # allows us to steal focus and grant keyboard input
+        current_thread = win32api.GetCurrentThreadId()
+        target_thread, _ = win32process.GetWindowThreadProcessId(hwnd)
+
+        if current_thread != target_thread:
+            win32process.AttachThreadInput(current_thread, target_thread, True)
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            finally:
+                win32process.AttachThreadInput(current_thread, target_thread, False)
+        else:
+            win32gui.SetForegroundWindow(hwnd)
     except Exception as e:
         logger.warning("Failed to set foreground window %d: %s", hwnd, e)
 
