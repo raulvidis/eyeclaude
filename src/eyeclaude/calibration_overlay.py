@@ -276,14 +276,26 @@ class CalibrationOverlay:
 
         if self._bound_step_index >= len(BOUND_STEPS):
             self._bounds_done = True
-            # top_left gaze maps to screen (0, 0)
-            # bottom_right gaze maps to screen (W, H)
+            tlx = self._bounds["top_left_x"]
+            tly = self._bounds["top_left_y"]
+            brx = self._bounds["bottom_right_x"]
+            bry = self._bounds["bottom_right_y"]
+
+            # Ensure correct direction: top-left should have lower gaze_x
+            # than bottom-right (screen left=0, right=W). If inverted, swap.
+            if tlx > brx:
+                self._bounds["top_left_x"], self._bounds["bottom_right_x"] = brx, tlx
+                print(f"  X axis swapped: {tlx:.4f} <-> {brx:.4f}")
+            if tly > bry:
+                self._bounds["top_left_y"], self._bounds["bottom_right_y"] = bry, tly
+                print(f"  Y axis swapped: {tly:.4f} <-> {bry:.4f}")
+
             tlx = self._bounds["top_left_x"]
             tly = self._bounds["top_left_y"]
             brx = self._bounds["bottom_right_x"]
             bry = self._bounds["bottom_right_y"]
             print(f"  Calibrated: TL=({tlx:.4f},{tly:.4f}) BR=({brx:.4f},{bry:.4f})")
-            print(f"  X range: {abs(brx-tlx):.4f}  Y range: {abs(bry-tly):.4f}")
+            print(f"  X range: {brx-tlx:.4f}  Y range: {bry-tly:.4f}")
             self._set_status(BOUND_DONE_MSG)
             self._update_edge_marker()
         else:
