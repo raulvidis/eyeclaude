@@ -261,52 +261,36 @@ def start():
                     click.echo("  ▶ Tracking RESUMED")
             elif hotkey == "recalibrate":
                 click.echo("  Recalibrating...")
+                # Steal webcam + landmarker from eye tracker (already initialized)
+                reuse_cap = eye_tracker._cap
+                reuse_lm = eye_tracker._landmarker
+                eye_tracker._cap = None
+                eye_tracker._landmarker = None
                 eye_tracker.stop()
-                # Reopen calibration overlay (reuses same webcam/landmarker)
+
                 from eyeclaude.calibration_overlay import CalibrationOverlay
                 recal_overlay = CalibrationOverlay(webcam_index=config.webcam_index)
-                # Need fresh webcam for recalibration
-                import cv2
-                import mediapipe as mp
-                recal_overlay._cap = cv2.VideoCapture(config.webcam_index)
-                recal_overlay._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                recal_overlay._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                model_path = str(Path.home() / ".eyeclaude" / "face_landmarker.task")
-                options = mp.tasks.vision.FaceLandmarkerOptions(
-                    base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
-                    running_mode=mp.tasks.vision.RunningMode.IMAGE,
-                    num_faces=1,
-                    min_face_detection_confidence=0.3,
-                    min_tracking_confidence=0.3,
-                )
-                recal_overlay._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+                recal_overlay._cap = reuse_cap
+                recal_overlay._landmarker = reuse_lm
                 new_cal = recal_overlay.run()
+
+                # Get resources back (overlay may have kept or replaced them)
+                cap_back, lm_back = recal_overlay.get_resources()
+
                 if new_cal:
                     calibration = new_cal
                     save_calibration(calibration)
                     click.echo(f"  Recalibrated — {len(calibration.points)} quadrants.")
-                    cap_new, lm_new = recal_overlay.get_resources()
-                    eye_tracker = EyeTracker(
-                        state=state, calibration=calibration,
-                        dwell_time_ms=config.dwell_time_ms,
-                        webcam_index=config.webcam_index,
-                        cap=cap_new, landmarker=lm_new,
-                    )
-                    eye_tracker.start()
                 else:
                     click.echo("  Recalibration cancelled, resuming with old calibration.")
-                    # Reopen webcam for eye tracker
-                    cap_new = cv2.VideoCapture(config.webcam_index)
-                    cap_new.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap_new.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    lm_new = mp.tasks.vision.FaceLandmarker.create_from_options(options)
-                    eye_tracker = EyeTracker(
-                        state=state, calibration=calibration,
-                        dwell_time_ms=config.dwell_time_ms,
-                        webcam_index=config.webcam_index,
-                        cap=cap_new, landmarker=lm_new,
-                    )
-                    eye_tracker.start()
+
+                eye_tracker = EyeTracker(
+                    state=state, calibration=calibration,
+                    dwell_time_ms=config.dwell_time_ms,
+                    webcam_index=config.webcam_index,
+                    cap=cap_back, landmarker=lm_back,
+                )
+                eye_tracker.start()
                 continue
 
             if paused:

@@ -136,34 +136,35 @@ class CalibrationOverlay:
             for i, t in enumerate(discovered)
         ]
 
-        # Open webcam on main thread (Windows DirectShow requirement)
-        try:
-            model_path = ensure_model()
-        except Exception as e:
-            logger.error("Model download failed: %s", e)
-            return None
+        # Open webcam + landmarker if not already provided (reuse for recalibration)
+        if self._cap is None or self._landmarker is None:
+            try:
+                model_path = ensure_model()
+            except Exception as e:
+                logger.error("Model download failed: %s", e)
+                return None
 
-        self._cap = cv2.VideoCapture(self._webcam_index)
-        if not self._cap.isOpened():
-            logger.error("Cannot open webcam %d", self._webcam_index)
-            return None
+            self._cap = cv2.VideoCapture(self._webcam_index)
+            if not self._cap.isOpened():
+                logger.error("Cannot open webcam %d", self._webcam_index)
+                return None
 
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        try:
-            options = mp_lib.tasks.vision.FaceLandmarkerOptions(
-                base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
-                running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
-                num_faces=1,
-                min_face_detection_confidence=0.3,
-                min_tracking_confidence=0.3,
-            )
-            self._landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
-        except Exception as e:
-            logger.error("MediaPipe init failed: %s", e)
-            self._cap.release()
-            return None
+            try:
+                options = mp_lib.tasks.vision.FaceLandmarkerOptions(
+                    base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
+                    running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
+                    num_faces=1,
+                    min_face_detection_confidence=0.3,
+                    min_tracking_confidence=0.3,
+                )
+                self._landmarker = mp_lib.tasks.vision.FaceLandmarker.create_from_options(options)
+            except Exception as e:
+                logger.error("MediaPipe init failed: %s", e)
+                self._cap.release()
+                return None
 
         ret, _ = self._cap.read()
         if not ret:
