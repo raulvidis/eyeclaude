@@ -213,7 +213,6 @@ def start():
 
     stop_event = threading.Event()
     paused = False
-    recalibrate_requested = threading.Event()
 
     def handle_signal(signum, frame):
         stop_event.set()
@@ -233,8 +232,9 @@ def start():
     try:
         ctypes.windll.user32.RegisterHotKey(None, HOTKEY_PAUSE, 0, VK_F8)
         ctypes.windll.user32.RegisterHotKey(None, HOTKEY_RECALIBRATE, 0, VK_F9)
-    except Exception:
-        click.echo("  Warning: Could not register global hotkeys")
+    except Exception as e:
+        click.echo(f"  Warning: Could not register global hotkeys: {e}")
+        logger.warning("RegisterHotKey failed: %s", e)
 
     def _poll_hotkeys():
         """Check for global hotkey messages (non-blocking)."""
@@ -326,8 +326,8 @@ def start():
     try:
         ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_PAUSE)
         ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_RECALIBRATE)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("UnregisterHotKey failed: %s", e)
 
     click.echo("\nShutting down...")
     eye_tracker.stop()

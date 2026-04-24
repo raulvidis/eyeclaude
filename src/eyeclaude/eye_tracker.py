@@ -152,10 +152,16 @@ class EyeTracker:
 
     def start(self) -> None:
         """Start tracking. Uses pre-opened webcam/landmarker if provided, otherwise opens new ones."""
+        # Detect a closed/invalid pre-provided capture so we reopen rather than hang reading from it.
+        if self._cap is not None and not self._cap.isOpened():
+            logger.warning("Pre-provided webcam is closed; reopening")
+            self._cap = None
         if self._cap is None:
             self._cap = cv2.VideoCapture(self._webcam_index)
             if not self._cap.isOpened():
                 logger.error("Cannot open webcam %d", self._webcam_index)
+                self._cap.release()
+                self._cap = None
                 return
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -170,6 +176,12 @@ class EyeTracker:
                 min_tracking_confidence=0.5,
             )
             self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+
+        if len(self._calibration.points) < 4:
+            logger.warning(
+                "Only %d/4 quadrants calibrated — gaze mapping will be degraded",
+                len(self._calibration.points),
+            )
 
         self._running = True
         self._thread = threading.Thread(target=self._track_loop, daemon=True)

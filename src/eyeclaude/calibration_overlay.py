@@ -136,23 +136,21 @@ class CalibrationOverlay:
             for i, t in enumerate(discovered)
         ]
 
-        # Open webcam + landmarker if not already provided (reuse for recalibration)
-        if self._cap is None or self._landmarker is None:
-            try:
-                model_path = ensure_model()
-            except Exception as e:
-                logger.error("Model download failed: %s", e)
-                return None
-
+        # Open webcam + landmarker if not already provided (reuse for recalibration).
+        # Only open the ones that are missing — don't overwrite caller-provided resources.
+        if self._cap is None:
             self._cap = cv2.VideoCapture(self._webcam_index)
             if not self._cap.isOpened():
                 logger.error("Cannot open webcam %d", self._webcam_index)
+                self._cap.release()
+                self._cap = None
                 return None
-
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+        if self._landmarker is None:
             try:
+                model_path = ensure_model()
                 options = mp_lib.tasks.vision.FaceLandmarkerOptions(
                     base_options=mp_lib.tasks.BaseOptions(model_asset_path=model_path),
                     running_mode=mp_lib.tasks.vision.RunningMode.IMAGE,
@@ -164,6 +162,7 @@ class CalibrationOverlay:
             except Exception as e:
                 logger.error("MediaPipe init failed: %s", e)
                 self._cap.release()
+                self._cap = None
                 return None
 
         ret, _ = self._cap.read()
@@ -171,6 +170,8 @@ class CalibrationOverlay:
             logger.error("Webcam opened but cannot read frames")
             self._landmarker.close()
             self._cap.release()
+            self._landmarker = None
+            self._cap = None
             return None
 
         self._gaze_thread = threading.Thread(target=self._gaze_loop, daemon=True)
@@ -180,7 +181,8 @@ class CalibrationOverlay:
         self._root.mainloop()
 
         self._running = False
-        time.sleep(0.1)
+        if self._gaze_thread:
+            self._gaze_thread.join(timeout=1.0)
         # Don't close webcam/landmarker — caller can reuse them via get_resources()
 
         return self._build_calibration_data()

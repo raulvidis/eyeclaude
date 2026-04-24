@@ -105,8 +105,11 @@ class PipeServer:
                 0, None,
             )
             win32file.CloseHandle(handle)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Pipe-unblock connect failed: %s", e)
+        if self._thread:
+            self._thread.join(timeout=3.0)
+            self._thread = None
 
     def _write_status_file(self, window_handle: int, state: str) -> None:
         """Write per-terminal status JSON for the statusline wrapper."""

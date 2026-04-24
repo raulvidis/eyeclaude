@@ -28,12 +28,21 @@ def set_foreground_window(hwnd: int) -> None:
         current_thread = win32api.GetCurrentThreadId()
         target_thread, _ = win32process.GetWindowThreadProcessId(hwnd)
 
-        if current_thread != target_thread:
-            win32process.AttachThreadInput(current_thread, target_thread, True)
+        if target_thread and current_thread != target_thread:
+            attached = False
+            try:
+                win32process.AttachThreadInput(current_thread, target_thread, True)
+                attached = True
+            except Exception as e:
+                logger.warning("AttachThreadInput failed for hwnd=%d: %s", hwnd, e)
             try:
                 win32gui.SetForegroundWindow(hwnd)
             finally:
-                win32process.AttachThreadInput(current_thread, target_thread, False)
+                if attached:
+                    try:
+                        win32process.AttachThreadInput(current_thread, target_thread, False)
+                    except Exception as e:
+                        logger.warning("AttachThreadInput detach failed for hwnd=%d: %s", hwnd, e)
         else:
             win32gui.SetForegroundWindow(hwnd)
     except Exception as e:
