@@ -24,9 +24,20 @@ from eyeclaude.window_manager import WindowManager
 logger = logging.getLogger("eyeclaude")
 
 
+# Force stdout/stderr to UTF-8 with replace-on-error before click runs.
+# Otherwise click + colorama crash with `OSError: Windows error 6` when writing
+# em-dashes, emoji, or geometric characters to the Windows console — which
+# happens during help formatting before any command callback executes.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+
 @click.group()
 def main():
-    """EyeClaude — Eye-tracking focus manager for Claude Code."""
+    """EyeClaude - Eye-tracking focus manager for Claude Code."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -187,7 +198,7 @@ def start():
         return
 
     save_calibration(calibration)
-    click.echo(f"Calibration saved — {len(calibration.points)} points captured.")
+    click.echo(f"Calibration saved - {len(calibration.points)} points captured.")
     for step, (gx, gy) in calibration.points.items():
         click.echo(f"  {step}: gaze=({gx:.4f}, {gy:.4f})")
 
@@ -256,9 +267,9 @@ def start():
             if hotkey == "pause":
                 paused = not paused
                 if paused:
-                    click.echo("  ⏸ Tracking PAUSED (F8 to resume)")
+                    click.echo("  [PAUSED] Tracking paused (F8 to resume)")
                 else:
-                    click.echo("  ▶ Tracking RESUMED")
+                    click.echo("  [RESUMED] Tracking resumed")
             elif hotkey == "recalibrate":
                 click.echo("  Recalibrating...")
                 # Steal webcam + landmarker from eye tracker (already initialized)
@@ -280,7 +291,7 @@ def start():
                 if new_cal:
                     calibration = new_cal
                     save_calibration(calibration)
-                    click.echo(f"  Recalibrated — {len(calibration.points)} points captured.")
+                    click.echo(f"  Recalibrated - {len(calibration.points)} points captured.")
                 else:
                     click.echo("  Recalibration cancelled, resuming with old calibration.")
 
