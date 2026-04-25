@@ -32,10 +32,12 @@ RIGHT_EYE_INNER = 263
 RIGHT_EYE_TOP = 386
 RIGHT_EYE_BOTTOM = 374
 
-# How much the iris-relative-to-eye-center signal contributes vs head pose.
-# Head pose alone = stable but requires moving your head; iris-only = sensitive
-# but jittery. The mix below gives smooth tracking that responds to both.
-IRIS_GAZE_WEIGHT = 0.4
+# How much the iris-relative-to-eye signal contributes vs head pose.
+# Higher = more eye-only sensitivity (good for users who keep their head still),
+# lower = more head-pose-driven. 0.7 makes a held-still head still produce a
+# clean signal across the screen.
+IRIS_GAZE_WEIGHT_X = 0.7
+IRIS_GAZE_WEIGHT_Y = 1.4  # Vertical eye motion is smaller in the image, so weight it more
 
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 MODEL_DIR = Path.home() / ".eyeclaude"
@@ -194,11 +196,12 @@ class OneEuroFilter:
 def _get_gaze(landmarks) -> tuple[float, float] | None:
     """Combined head-pose + iris-relative gaze signal.
 
-    Head pose (nose tip in normalized image coords) provides a stable, large-range
-    base signal. The iris position relative to the eye center, normalized by eye
-    dimensions, adds eye-only sensitivity so users don't have to physically turn
-    their head between quadrants. Both signals are monotonic in the same direction
-    after the horizontal frame flip the tracker applies, so they reinforce.
+    Reference points used:
+      * eye-corner midpoint for both X and Y (stable; corners don't move with
+        the lids the way TOP/BOTTOM landmarks do, which is what was causing
+        the vertical signal to collapse to noise)
+      * eye width (corner-to-corner) for normalization on BOTH axes — height
+        normalization was unreliable because lid distance varies with gaze
     """
     try:
         nose = landmarks[1]
@@ -206,30 +209,24 @@ def _get_gaze(landmarks) -> tuple[float, float] | None:
         l_iris = landmarks[LEFT_IRIS_CENTER]
         l_outer = landmarks[LEFT_EYE_OUTER]
         l_inner = landmarks[LEFT_EYE_INNER]
-        l_top = landmarks[LEFT_EYE_TOP]
-        l_bot = landmarks[LEFT_EYE_BOTTOM]
 
         r_iris = landmarks[RIGHT_IRIS_CENTER]
         r_outer = landmarks[RIGHT_EYE_OUTER]
         r_inner = landmarks[RIGHT_EYE_INNER]
-        r_top = landmarks[RIGHT_EYE_TOP]
-        r_bot = landmarks[RIGHT_EYE_BOTTOM]
 
         l_cx = (l_outer.x + l_inner.x) / 2.0
-        l_cy = (l_top.y + l_bot.y) / 2.0
+        l_cy = (l_outer.y + l_inner.y) / 2.0
         l_w = abs(l_inner.x - l_outer.x) or 1e-3
-        l_h = abs(l_bot.y - l_top.y) or 1e-3
 
         r_cx = (r_outer.x + r_inner.x) / 2.0
-        r_cy = (r_top.y + r_bot.y) / 2.0
+        r_cy = (r_outer.y + r_inner.y) / 2.0
         r_w = abs(r_inner.x - r_outer.x) or 1e-3
-        r_h = abs(r_bot.y - r_top.y) or 1e-3
 
         eye_dx = ((l_iris.x - l_cx) / l_w + (r_iris.x - r_cx) / r_w) / 2.0
-        eye_dy = ((l_iris.y - l_cy) / l_h + (r_iris.y - r_cy) / r_h) / 2.0
+        eye_dy = ((l_iris.y - l_cy) / l_w + (r_iris.y - r_cy) / r_w) / 2.0
 
-        gaze_x = nose.x + IRIS_GAZE_WEIGHT * eye_dx
-        gaze_y = nose.y + IRIS_GAZE_WEIGHT * eye_dy
+        gaze_x = nose.x + IRIS_GAZE_WEIGHT_X * eye_dx
+        gaze_y = nose.y + IRIS_GAZE_WEIGHT_Y * eye_dy
         return (gaze_x, gaze_y)
     except (IndexError, AttributeError):
         return None

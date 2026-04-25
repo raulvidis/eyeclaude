@@ -315,16 +315,36 @@ class CalibrationOverlay:
             self._set_status(f"Calibration fit failed: {e}. Press R to retry.")
             return
 
-        # Sanity check: residual at the captured points should be small (<10% of screen).
+        # Sanity check: residual at the captured points should be reasonable.
+        # An affine fit through 5 points can't be perfect when real gaze data
+        # has noise, so a single value is unlikely to be tiny — we mainly want
+        # to catch cases where one axis collapses to noise (mean residual blows up).
         residuals = []
         for (sx, sy), (tx, ty) in zip(samples, targets):
             pred = self._affine @ np.array([sx, sy, 1.0])
             residuals.append(np.hypot(pred[0] - tx, pred[1] - ty))
         max_res = max(residuals)
-        logger.info("Affine residuals: max=%.3f mean=%.3f", max_res, float(np.mean(residuals)))
-        if max_res > 0.25:
+        mean_res = float(np.mean(residuals))
+        x_spread = max(s[0] for s in samples) - min(s[0] for s in samples)
+        y_spread = max(s[1] for s in samples) - min(s[1] for s in samples)
+        logger.info(
+            "Calibration: x_spread=%.3f y_spread=%.3f residuals max=%.3f mean=%.3f",
+            x_spread, y_spread, max_res, mean_res,
+        )
+
+        # Each axis needs measurable spread. If the user kept their eyes fixed
+        # on one axis, no affine can recover the mapping.
+        if x_spread < 0.03 or y_spread < 0.03:
             self._set_status(
-                f"Calibration too inconsistent (residual {max_res:.2f}). Press R to retry."
+                f"Gaze barely moved on one axis (X={x_spread:.3f}, Y={y_spread:.3f}). "
+                "Move only your eyes between markers, not your head. Press R to retry."
+            )
+            return
+
+        if mean_res > 0.30:
+            self._set_status(
+                f"Calibration too inconsistent (mean residual {mean_res:.2f}). "
+                "Hold your head still, look only at each marker. Press R to retry."
             )
             return
 
