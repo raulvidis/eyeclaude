@@ -35,13 +35,21 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
-@click.group()
-def main():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def main(ctx):
     """EyeClaude - Eye-tracking focus manager for Claude Code."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # When invoked with no subcommand, print help on stdout. This avoids
+    # click's NoArgsIsHelpError path which writes to stderr via colorama's
+    # _winconsole — that path crashes on Python 3.13 + Windows with
+    # "OSError: Windows error 6" regardless of the characters being written.
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(0)
 
 
 def _install_statusline():
