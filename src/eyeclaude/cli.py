@@ -13,7 +13,7 @@ import click
 import win32file
 import win32pipe
 
-from eyeclaude.calibration import load_calibration, run_calibration, save_calibration, DEFAULT_CALIBRATION_PATH
+from eyeclaude.calibration import load_calibration, save_calibration, DEFAULT_CALIBRATION_PATH
 from eyeclaude.config import load_config, save_config, EyeClaudeConfig, DEFAULT_CONFIG_PATH
 from eyeclaude.eye_tracker import EyeTracker
 from eyeclaude.pipe_server import PipeServer, PIPE_NAME, _assign_quadrant_by_position
@@ -187,9 +187,9 @@ def start():
         return
 
     save_calibration(calibration)
-    click.echo(f"Calibration saved — {len(calibration.points)} quadrants.")
-    for q, (gx, gy) in calibration.points.items():
-        click.echo(f"  {q.value}: gaze=({gx:.4f}, {gy:.4f})")
+    click.echo(f"Calibration saved — {len(calibration.points)} points captured.")
+    for step, (gx, gy) in calibration.points.items():
+        click.echo(f"  {step}: gaze=({gx:.4f}, {gy:.4f})")
 
     # Reuse webcam + landmarker from calibration overlay (avoids 30-60s reinit)
     cap, landmarker = overlay_app.get_resources()
@@ -280,7 +280,7 @@ def start():
                 if new_cal:
                     calibration = new_cal
                     save_calibration(calibration)
-                    click.echo(f"  Recalibrated — {len(calibration.points)} quadrants.")
+                    click.echo(f"  Recalibrated — {len(calibration.points)} points captured.")
                 else:
                     click.echo("  Recalibration cancelled, resuming with old calibration.")
 

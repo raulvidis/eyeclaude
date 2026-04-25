@@ -1,4 +1,4 @@
-"""MediaPipe iris tracking and gaze-to-quadrant mapping."""
+"""MediaPipe gaze tracking and gaze-to-quadrant mapping."""
 
 import logging
 import math
@@ -11,6 +11,7 @@ import urllib.request
 
 import cv2
 import mediapipe as mp
+import numpy as np
 
 from eyeclaude.shared_state import Quadrant, SharedState
 
@@ -20,18 +21,21 @@ logger = logging.getLogger(__name__)
 LEFT_IRIS_CENTER = 468
 RIGHT_IRIS_CENTER = 473
 
-# Eye corner landmarks for relative gaze calculation
-# Left eye (from camera's perspective)
+# Eye corner / lid landmarks for relative gaze calculation (camera's perspective)
 LEFT_EYE_OUTER = 33
 LEFT_EYE_INNER = 133
 LEFT_EYE_TOP = 159
 LEFT_EYE_BOTTOM = 145
 
-# Right eye (from camera's perspective)
 RIGHT_EYE_OUTER = 362
 RIGHT_EYE_INNER = 263
 RIGHT_EYE_TOP = 386
 RIGHT_EYE_BOTTOM = 374
+
+# How much the iris-relative-to-eye-center signal contributes vs head pose.
+# Head pose alone = stable but requires moving your head; iris-only = sensitive
+# but jittery. The mix below gives smooth tracking that responds to both.
+IRIS_GAZE_WEIGHT = 0.4
 
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 MODEL_DIR = Path.home() / ".eyeclaude"
@@ -50,25 +54,53 @@ def ensure_model() -> str:
 
 @dataclass
 class CalibrationData:
-    """Maps each quadrant to its calibrated iris position (normalized x, y)."""
-    points: dict[Quadrant, tuple[float, float]] = field(default_factory=dict)
+    """Calibrated mapping from raw gaze coordinates to normalized screen [0,1]^2.
+
+    The affine matrix (2x3) maps `[gx, gy, 1]` → `[screen_x_norm, screen_y_norm]`.
+    `points` is a diagnostic record of the captured gaze samples per calibration step.
+    """
+    affine: np.ndarray | None = None
+    points: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def is_valid(self) -> bool:
+        return self.affine is not None
+
+    def gaze_to_screen_norm(self, gx: float, gy: float) -> tuple[float, float]:
+        """Map raw gaze to normalized screen coords [0,1]^2 (clamped)."""
+        if self.affine is None:
+            return (max(0.0, min(1.0, gx)), max(0.0, min(1.0, gy)))
+        v = self.affine @ np.array([gx, gy, 1.0])
+        return (max(0.0, min(1.0, float(v[0]))), max(0.0, min(1.0, float(v[1]))))
+
+
+def fit_affine(
+    samples: list[tuple[float, float]],
+    targets: list[tuple[float, float]],
+) -> np.ndarray:
+    """Least-squares fit of a 2x3 affine matrix mapping samples → targets.
+
+    Both inputs are lists of (x, y) tuples of equal length (>= 3 for a unique fit).
+    Returns A such that `targets[i] ≈ A @ [samples[i].x, samples[i].y, 1]`.
+    """
+    if len(samples) != len(targets):
+        raise ValueError("samples and targets must have equal length")
+    if len(samples) < 3:
+        raise ValueError("need at least 3 sample/target pairs")
+
+    M = np.array([[sx, sy, 1.0] for sx, sy in samples], dtype=np.float64)
+    T = np.array(targets, dtype=np.float64)
+    A_T, *_ = np.linalg.lstsq(M, T, rcond=None)
+    return A_T.T  # shape (2, 3)
 
 
 def map_gaze_to_quadrant(
     gaze: tuple[float, float], calibration: CalibrationData
 ) -> Quadrant:
-    """Find the nearest calibrated quadrant to the current gaze position."""
-    gx, gy = gaze
-    best_quadrant = Quadrant.TOP_LEFT
-    best_dist = float("inf")
-
-    for quadrant, (cx, cy) in calibration.points.items():
-        dist = math.hypot(gx - cx, gy - cy)
-        if dist < best_dist:
-            best_dist = dist
-            best_quadrant = quadrant
-
-    return best_quadrant
+    """Map a raw gaze sample to a screen quadrant via the calibrated affine."""
+    sx, sy = calibration.gaze_to_screen_norm(gaze[0], gaze[1])
+    if sx < 0.5:
+        return Quadrant.TOP_LEFT if sy < 0.5 else Quadrant.BOTTOM_LEFT
+    return Quadrant.TOP_RIGHT if sy < 0.5 else Quadrant.BOTTOM_RIGHT
 
 
 class DwellTracker:
@@ -101,36 +133,110 @@ class DwellTracker:
         return None
 
 
-def _get_iris_center(landmarks) -> tuple[float, float] | None:
-    """Extract gaze direction using amplified iris-nose offset + head pose.
+class OneEuroFilter:
+    """Adaptive low-pass filter for noisy signals (Casiez et al., 2012).
 
-    The iris-to-nose offset captures where you're looking independent of
-    head position. We amplify this offset and add it to the nose position
-    (which captures head turns). Small eye movements get multiplied into
-    large quadrant-distinguishing signals.
+    Low cutoff when the signal is steady (smooth), high cutoff when it moves
+    (low lag). Much better feel than a fixed EMA for gaze data.
+    """
 
-    Returns (x, y) where the values represent relative gaze direction.
+    def __init__(
+        self,
+        freq: float = 30.0,
+        mincutoff: float = 1.0,
+        beta: float = 0.5,
+        dcutoff: float = 1.0,
+    ):
+        self._freq = freq
+        self._mincutoff = mincutoff
+        self._beta = beta
+        self._dcutoff = dcutoff
+        self._x_prev: float | None = None
+        self._dx_prev: float = 0.0
+        self._t_prev: float | None = None
+
+    @staticmethod
+    def _alpha(cutoff: float, freq: float) -> float:
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        te = 1.0 / max(freq, 1e-6)
+        return 1.0 / (1.0 + tau / te)
+
+    def filter(self, x: float, t: float | None = None) -> float:
+        if self._x_prev is None:
+            self._x_prev = x
+            self._t_prev = t
+            return x
+
+        if t is not None and self._t_prev is not None:
+            dt = t - self._t_prev
+            if dt > 1e-6:
+                self._freq = 1.0 / dt
+        self._t_prev = t
+
+        dx = (x - self._x_prev) * self._freq
+        a_d = self._alpha(self._dcutoff, self._freq)
+        dx_hat = a_d * dx + (1.0 - a_d) * self._dx_prev
+
+        cutoff = self._mincutoff + self._beta * abs(dx_hat)
+        a = self._alpha(cutoff, self._freq)
+        x_hat = a * x + (1.0 - a) * self._x_prev
+
+        self._x_prev = x_hat
+        self._dx_prev = dx_hat
+        return x_hat
+
+    def reset(self) -> None:
+        self._x_prev = None
+        self._dx_prev = 0.0
+        self._t_prev = None
+
+
+def _get_gaze(landmarks) -> tuple[float, float] | None:
+    """Combined head-pose + iris-relative gaze signal.
+
+    Head pose (nose tip in normalized image coords) provides a stable, large-range
+    base signal. The iris position relative to the eye center, normalized by eye
+    dimensions, adds eye-only sensitivity so users don't have to physically turn
+    their head between quadrants. Both signals are monotonic in the same direction
+    after the horizontal frame flip the tracker applies, so they reinforce.
     """
     try:
-        # Nose tip (landmark 1) tracks head pose
         nose = landmarks[1]
 
-        # X: nose position only (head tracking). Iris offset removed —
-        # it consistently fights the head direction in the flipped frame.
-        gaze_x = nose.x
+        l_iris = landmarks[LEFT_IRIS_CENTER]
+        l_outer = landmarks[LEFT_EYE_OUTER]
+        l_inner = landmarks[LEFT_EYE_INNER]
+        l_top = landmarks[LEFT_EYE_TOP]
+        l_bot = landmarks[LEFT_EYE_BOTTOM]
 
-        # Y: nose position only — vertical gaze is dominated by head tilt,
-        # not iris movement (iris barely moves up/down in the socket).
-        # nose.y tracks head tilt naturally in 0-1 image space.
-        gaze_y = nose.y
+        r_iris = landmarks[RIGHT_IRIS_CENTER]
+        r_outer = landmarks[RIGHT_EYE_OUTER]
+        r_inner = landmarks[RIGHT_EYE_INNER]
+        r_top = landmarks[RIGHT_EYE_TOP]
+        r_bot = landmarks[RIGHT_EYE_BOTTOM]
 
+        l_cx = (l_outer.x + l_inner.x) / 2.0
+        l_cy = (l_top.y + l_bot.y) / 2.0
+        l_w = abs(l_inner.x - l_outer.x) or 1e-3
+        l_h = abs(l_bot.y - l_top.y) or 1e-3
+
+        r_cx = (r_outer.x + r_inner.x) / 2.0
+        r_cy = (r_top.y + r_bot.y) / 2.0
+        r_w = abs(r_inner.x - r_outer.x) or 1e-3
+        r_h = abs(r_bot.y - r_top.y) or 1e-3
+
+        eye_dx = ((l_iris.x - l_cx) / l_w + (r_iris.x - r_cx) / r_w) / 2.0
+        eye_dy = ((l_iris.y - l_cy) / l_h + (r_iris.y - r_cy) / r_h) / 2.0
+
+        gaze_x = nose.x + IRIS_GAZE_WEIGHT * eye_dx
+        gaze_y = nose.y + IRIS_GAZE_WEIGHT * eye_dy
         return (gaze_x, gaze_y)
     except (IndexError, AttributeError):
         return None
 
 
 class EyeTracker:
-    """Captures webcam feed and tracks iris position using MediaPipe."""
+    """Captures webcam feed, computes gaze, and updates active quadrant on dwell."""
 
     def __init__(
         self,
@@ -149,10 +255,11 @@ class EyeTracker:
         self._thread: threading.Thread | None = None
         self._cap = cap
         self._landmarker = landmarker
+        self._fx = OneEuroFilter(mincutoff=1.0, beta=0.7)
+        self._fy = OneEuroFilter(mincutoff=1.0, beta=0.7)
 
     def start(self) -> None:
         """Start tracking. Uses pre-opened webcam/landmarker if provided, otherwise opens new ones."""
-        # Detect a closed/invalid pre-provided capture so we reopen rather than hang reading from it.
         if self._cap is not None and not self._cap.isOpened():
             logger.warning("Pre-provided webcam is closed; reopening")
             self._cap = None
@@ -177,11 +284,8 @@ class EyeTracker:
             )
             self._landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
 
-        if len(self._calibration.points) < 4:
-            logger.warning(
-                "Only %d/4 quadrants calibrated — gaze mapping will be degraded",
-                len(self._calibration.points),
-            )
+        if not self._calibration.is_valid():
+            logger.warning("EyeTracker started without a valid affine calibration")
 
         self._running = True
         self._thread = threading.Thread(target=self._track_loop, daemon=True)
@@ -214,13 +318,18 @@ class EyeTracker:
 
                 gaze = None
                 if result.face_landmarks:
-                    landmarks = result.face_landmarks[0]
-                    gaze = _get_iris_center(landmarks)
+                    gaze = _get_gaze(result.face_landmarks[0])
 
-                timestamp_ms = time.monotonic() * 1000
+                t = time.monotonic()
+                timestamp_ms = t * 1000
                 quadrant = None
-                if gaze and self._calibration.points:
-                    quadrant = map_gaze_to_quadrant(gaze, self._calibration)
+                if gaze and self._calibration.is_valid():
+                    fx = self._fx.filter(gaze[0], t)
+                    fy = self._fy.filter(gaze[1], t)
+                    quadrant = map_gaze_to_quadrant((fx, fy), self._calibration)
+                elif gaze is None:
+                    self._fx.reset()
+                    self._fy.reset()
 
                 activated = self._dwell.update(quadrant, timestamp_ms)
                 if activated:
