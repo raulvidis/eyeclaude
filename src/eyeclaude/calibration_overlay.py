@@ -3,6 +3,7 @@
 
 import collections
 import logging
+import math
 import threading
 import time
 import tkinter as tk
@@ -91,10 +92,26 @@ class CalibrationOverlay:
     """Full-screen Tkinter overlay that walks the user through 5-point gaze
     calibration and fits an affine transform from gaze to screen coordinates."""
 
-    GAZE_DOT_RADIUS = 12
-    BG_OPACITY = 0.7
+    GAZE_DOT_RADIUS = 10
+    BG_OPACITY = 0.78
     POLL_INTERVAL_MS = 100
     GAZE_INTERVAL_MS = 33
+    PULSE_HZ = 1.6  # marker pulse frequency
+
+    # Color tokens
+    COLOR_BG = "#0b0d10"
+    COLOR_TITLE = "#ffffff"
+    COLOR_HINT = "#7d8590"
+    COLOR_STATUS = "#ffd166"
+    COLOR_TARGET = "#ff5d6c"
+    COLOR_TARGET_GLOW = "#ff8a95"
+    COLOR_GAZE_STABLE = "#3ddc97"
+    COLOR_GAZE_UNSTABLE = "#ffae42"
+    COLOR_DOT_DONE = "#3ddc97"
+    COLOR_DOT_CURRENT = "#ffd166"
+    COLOR_DOT_PENDING = "#3a414a"
+    COLOR_RECT = "#3a414a"
+    COLOR_RECT_LABEL = "#7d8590"
 
     def __init__(self, webcam_index: int = 0):
         self._webcam_index = webcam_index
@@ -105,6 +122,11 @@ class CalibrationOverlay:
         self._gaze_dot_id: int | None = None
         self._status_label_id: int | None = None
         self._edge_marker_id: int | None = None
+        self._target_glow_id: int | None = None
+        self._title_id: int | None = None
+        self._hints_id: int | None = None
+        self._step_label_id: int | None = None
+        self._progress_dot_ids: list[int] = []
         self._rect_ids: dict[int, int] = {}
         self._label_ids: dict[int, int] = {}
 
@@ -213,7 +235,7 @@ class CalibrationOverlay:
         self._root.attributes("-fullscreen", True)
         self._root.attributes("-topmost", True)
         self._root.attributes("-alpha", self.BG_OPACITY)
-        self._root.configure(bg="black")
+        self._root.configure(bg=self.COLOR_BG)
 
         screen_w = self._root.winfo_screenwidth()
         screen_h = self._root.winfo_screenheight()
@@ -222,40 +244,88 @@ class CalibrationOverlay:
 
         self._canvas = tk.Canvas(
             self._root, width=screen_w, height=screen_h,
-            bg="black", highlightthickness=0,
+            bg=self.COLOR_BG, highlightthickness=0,
         )
         self._canvas.pack(fill=tk.BOTH, expand=True)
 
+        # Terminal outlines (subtle, so they don't compete with the calibration target)
         for tr in self._terminal_rects:
             rid = self._canvas.create_rectangle(
                 tr.left, tr.top, tr.right, tr.bottom,
-                outline="white", width=3, fill="",
+                outline=self.COLOR_RECT, width=2, fill="", dash=(6, 4),
             )
             self._rect_ids[tr.hwnd] = rid
             cx = (tr.left + tr.right) // 2
             cy = (tr.top + tr.bottom) // 2
             lid = self._canvas.create_text(
-                cx, cy, text=tr.label, fill="white",
-                font=("Segoe UI", 16, "bold"),
+                cx, cy, text=tr.label, fill=self.COLOR_RECT_LABEL,
+                font=("Segoe UI", 14),
             )
             self._label_ids[tr.hwnd] = lid
 
-        self._status_label_id = self._canvas.create_text(
-            screen_w // 2, screen_h - 40,
-            text=CALIB_LABELS[CALIB_STEPS[0]],
-            fill="#ffcc00", font=("Segoe UI", 16, "bold"),
+        # Title
+        self._title_id = self._canvas.create_text(
+            screen_w // 2, 36,
+            text="EyeClaude Calibration",
+            fill=self.COLOR_TITLE, font=("Segoe UI Semibold", 22),
         )
 
+        # Key hints (top right)
+        self._hints_id = self._canvas.create_text(
+            screen_w - 32, 36,
+            text="SPACE  capture     R  restart     ESC  cancel",
+            fill=self.COLOR_HINT, font=("Segoe UI", 12),
+            anchor="e",
+        )
+
+        # Progress dots
+        n = len(CALIB_STEPS)
+        spacing = 32
+        total_w = (n - 1) * spacing
+        start_x = screen_w // 2 - total_w // 2
+        dot_y = 76
+        for i in range(n):
+            x = start_x + i * spacing
+            did = self._canvas.create_oval(
+                x - 7, dot_y - 7, x + 7, dot_y + 7,
+                outline=self.COLOR_DOT_PENDING, width=2, fill="",
+            )
+            self._progress_dot_ids.append(did)
+
+        # Step label (e.g., "Step 1 of 5")
+        self._step_label_id = self._canvas.create_text(
+            screen_w // 2, 108,
+            text=f"Step 1 of {n}",
+            fill=self.COLOR_HINT, font=("Segoe UI", 11),
+        )
+
+        # Status text (bottom)
+        self._status_label_id = self._canvas.create_text(
+            screen_w // 2, screen_h - 56,
+            text=CALIB_LABELS[CALIB_STEPS[0]],
+            fill=self.COLOR_STATUS, font=("Segoe UI Semibold", 18),
+        )
+
+        # Live gaze dot (color reflects sample stability)
         self._gaze_dot_id = self._canvas.create_oval(
             -100, -100, -100, -100,
-            fill="#00ff88", outline="white", width=2,
+            fill=self.COLOR_GAZE_UNSTABLE, outline="", width=0,
         )
 
+        # Pulsing target glow (rendered behind the marker)
+        self._target_glow_id = self._canvas.create_oval(
+            -100, -100, -100, -100,
+            outline="", fill=self.COLOR_TARGET_GLOW,
+        )
+
+        # Target marker (geometric character)
         self._edge_marker_id = self._canvas.create_text(
             40, 40,
-            text="◤", fill="#ff4444", font=("Segoe UI", 32, "bold"),
+            text="◤", fill=self.COLOR_TARGET, font=("Segoe UI", 36, "bold"),
         )
+
         self._update_edge_marker()
+        self._update_progress_dots()
 
         self._root.focus_force()
         self._root.bind("<space>", self._on_space)
@@ -265,6 +335,7 @@ class CalibrationOverlay:
 
         self._root.after(self.POLL_INTERVAL_MS, self._poll_window_positions)
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
+        self._root.after(self.GAZE_INTERVAL_MS, self._update_pulse)
 
     def _on_space(self, event) -> None:
         if self._calibration_done:
@@ -278,8 +349,8 @@ class CalibrationOverlay:
 
         if len(window) < CAPTURE_MIN_SAMPLES:
             self._set_status(
-                f"Not enough samples ({len(window)}/{CAPTURE_MIN_SAMPLES}). "
-                "Hold still and look at the marker, then press SPACE."
+                f"Need more samples ({len(window)}/{CAPTURE_MIN_SAMPLES}) - "
+                "look at the marker and hold still."
             )
             return
 
@@ -287,7 +358,8 @@ class CalibrationOverlay:
         ys = np.array([w[1] for w in window])
         if xs.std() > CAPTURE_MAX_STD or ys.std() > CAPTURE_MAX_STD:
             self._set_status(
-                f"Gaze too noisy (std {xs.std():.3f}, {ys.std():.3f}). Hold still and retry."
+                f"Gaze too noisy (std {xs.std():.3f}, {ys.std():.3f}). "
+                "Hold still on the marker, then press SPACE."
             )
             return
 
@@ -298,12 +370,93 @@ class CalibrationOverlay:
         self._captures[step] = (gx, gy)
         logger.info("Captured %s: gaze=(%.4f, %.4f) from %d samples", step, gx, gy, len(window))
 
+        self._flash_captured(step)
         self._step_index += 1
+        self._update_progress_dots()
         if self._step_index >= len(CALIB_STEPS):
             self._finish_calibration()
         else:
             self._set_status(CALIB_LABELS[CALIB_STEPS[self._step_index]])
             self._update_edge_marker()
+
+    def _flash_captured(self, step: str) -> None:
+        """Briefly show a green ✓ at the just-captured target."""
+        x, y = self._target_position(step)
+        flash_id = self._canvas.create_text(
+            x, y, text="✓",
+            fill=self.COLOR_GAZE_STABLE,
+            font=("Segoe UI", 56, "bold"),
+        )
+        def _cleanup():
+            try:
+                self._canvas.delete(flash_id)
+            except tk.TclError:
+                pass
+        self._root.after(450, _cleanup)
+
+    def _update_progress_dots(self) -> None:
+        for i, did in enumerate(self._progress_dot_ids):
+            if i < self._step_index or self._calibration_done:
+                self._canvas.itemconfig(
+                    did, fill=self.COLOR_DOT_DONE, outline=self.COLOR_DOT_DONE,
+                )
+            elif i == self._step_index:
+                self._canvas.itemconfig(
+                    did, fill=self.COLOR_DOT_CURRENT, outline=self.COLOR_DOT_CURRENT,
+                )
+            else:
+                self._canvas.itemconfig(
+                    did, fill="", outline=self.COLOR_DOT_PENDING,
+                )
+        if self._step_label_id is not None:
+            n = len(CALIB_STEPS)
+            if self._calibration_done:
+                self._canvas.itemconfig(self._step_label_id, text="Calibrated")
+            else:
+                self._canvas.itemconfig(
+                    self._step_label_id,
+                    text=f"Step {self._step_index + 1} of {n}",
+                )
+
+    def _target_position(self, step: str) -> tuple[int, int]:
+        screen_w = self._screen_w
+        screen_h = self._screen_h
+        positions = {
+            "top_left": (40, 40),
+            "top_right": (screen_w - 40, 40),
+            "bottom_right": (screen_w - 40, screen_h - 40),
+            "bottom_left": (40, screen_h - 40),
+            "center": (screen_w // 2, screen_h // 2),
+        }
+        return positions[step]
+
+    def _update_pulse(self) -> None:
+        """Drive the pulsing glow behind the active target marker."""
+        if not self._running or self._root is None:
+            return
+
+        if self._calibration_done or self._edge_marker_id is None or self._target_glow_id is None:
+            # Hide glow when there's no active target
+            if self._target_glow_id is not None:
+                self._canvas.coords(self._target_glow_id, -100, -100, -100, -100)
+            self._root.after(80, self._update_pulse)
+            return
+
+        step = CALIB_STEPS[self._step_index]
+        x, y = self._target_position(step)
+        t = time.monotonic()
+        # 0..1 sine envelope
+        phase = 0.5 + 0.5 * math.sin(t * 2.0 * math.pi * self.PULSE_HZ)
+        radius = 24 + 16 * phase
+        # Stipple gives a soft halo even with solid fill
+        stipple = "gray25" if phase > 0.5 else "gray12"
+        self._canvas.coords(
+            self._target_glow_id,
+            x - radius, y - radius, x + radius, y + radius,
+        )
+        self._canvas.itemconfig(self._target_glow_id, stipple=stipple, fill=self.COLOR_TARGET_GLOW)
+        self._canvas.tag_raise(self._edge_marker_id)
+        self._root.after(self.GAZE_INTERVAL_MS, self._update_pulse)
 
     def _finish_calibration(self) -> None:
         samples = [self._captures[s] for s in CALIB_STEPS]
@@ -352,25 +505,27 @@ class CalibrationOverlay:
         if self._edge_marker_id is not None:
             self._canvas.delete(self._edge_marker_id)
             self._edge_marker_id = None
+        if self._target_glow_id is not None:
+            self._canvas.delete(self._target_glow_id)
+            self._target_glow_id = None
+        self._update_progress_dots()
         self._set_status(CALIB_DONE_MSG)
 
     def _update_edge_marker(self) -> None:
         if self._calibration_done or self._edge_marker_id is None:
             return
 
-        screen_w = self._screen_w
-        screen_h = self._screen_h
         step = CALIB_STEPS[self._step_index]
-        positions = {
-            "top_left": (40, 40, "◤"),                    # ◤
-            "top_right": (screen_w - 40, 40, "◥"),         # ◥
-            "bottom_right": (screen_w - 40, screen_h - 40, "◢"),  # ◢
-            "bottom_left": (40, screen_h - 40, "◣"),       # ◣
-            "center": (screen_w // 2, screen_h // 2, "●"), # ●
+        glyphs = {
+            "top_left": "◤",
+            "top_right": "◥",
+            "bottom_right": "◢",
+            "bottom_left": "◣",
+            "center": "●",
         }
-        x, y, marker = positions[step]
+        x, y = self._target_position(step)
         self._canvas.coords(self._edge_marker_id, x, y)
-        self._canvas.itemconfig(self._edge_marker_id, text=marker)
+        self._canvas.itemconfig(self._edge_marker_id, text=glyphs[step])
 
     def _on_escape(self, event) -> None:
         self._running = False
@@ -387,9 +542,16 @@ class CalibrationOverlay:
         if self._edge_marker_id is None:
             self._edge_marker_id = self._canvas.create_text(
                 40, 40,
-                text="◤", fill="#ff4444", font=("Segoe UI", 32, "bold"),
+                text="◤", fill=self.COLOR_TARGET, font=("Segoe UI", 36, "bold"),
             )
+        if self._target_glow_id is None:
+            self._target_glow_id = self._canvas.create_oval(
+                -100, -100, -100, -100,
+                outline="", fill=self.COLOR_TARGET_GLOW,
+            )
+            self._canvas.tag_lower(self._target_glow_id, self._edge_marker_id)
         self._update_edge_marker()
+        self._update_progress_dots()
         self._set_status(CALIB_LABELS[CALIB_STEPS[0]])
 
     def _set_status(self, text: str) -> None:
@@ -418,11 +580,22 @@ class CalibrationOverlay:
         with self._gaze_lock:
             gaze = self._raw_gaze
             cam_err = self._camera_error
+            cutoff = time.monotonic() - CAPTURE_WINDOW_SEC
+            window = [(gx, gy) for ts, gx, gy in self._gaze_history
+                      if ts >= cutoff and gx is not None and gy is not None]
 
         if cam_err:
             self._set_status(f"Camera error: {cam_err}")
             self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
             return
+
+        # Color the dot green when a SPACE press right now would succeed.
+        stable = False
+        if len(window) >= CAPTURE_MIN_SAMPLES and not self._calibration_done:
+            xs = np.array([w[0] for w in window])
+            ys = np.array([w[1] for w in window])
+            if xs.std() <= CAPTURE_MAX_STD and ys.std() <= CAPTURE_MAX_STD:
+                stable = True
 
         if gaze and self._gaze_dot_id:
             t = time.monotonic()
@@ -430,7 +603,9 @@ class CalibrationOverlay:
             fy = self._fy.filter(gaze[1], t)
             sx, sy = self._map_gaze_to_screen(fx, fy)
             r = self.GAZE_DOT_RADIUS
+            color = self.COLOR_GAZE_STABLE if stable else self.COLOR_GAZE_UNSTABLE
             self._canvas.coords(self._gaze_dot_id, sx - r, sy - r, sx + r, sy + r)
+            self._canvas.itemconfig(self._gaze_dot_id, fill=color)
             self._canvas.tag_raise(self._gaze_dot_id)
 
         self._root.after(self.GAZE_INTERVAL_MS, self._update_gaze_dot)
