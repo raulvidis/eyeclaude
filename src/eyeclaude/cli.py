@@ -337,6 +337,13 @@ def start():
                 window_manager.update_focus(active)
                 status_monitor.tick()
                 _update_active_status_files(state)
+                # Throttle prune to once every ~2 seconds (loop runs every 50ms)
+                if not hasattr(_prune_dead_terminals, "_tick"):
+                    _prune_dead_terminals._tick = 0
+                _prune_dead_terminals._tick += 1
+                if _prune_dead_terminals._tick >= 40:
+                    _prune_dead_terminals._tick = 0
+                    _prune_dead_terminals(state)
             time.sleep(0.05)
     except KeyboardInterrupt:
         pass
@@ -533,6 +540,18 @@ def _remove_claude_hooks():
         del settings["hooks"]
 
     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+
+def _prune_dead_terminals(state: SharedState) -> None:
+    """Remove terminals whose window handles are no longer valid windows."""
+    try:
+        import win32gui
+    except ImportError:
+        return
+    for terminal in list(state.get_all_terminals()):
+        if not win32gui.IsWindow(terminal.window_handle):
+            state.unregister_terminal(pid=terminal.pid)
+            logger.info("Pruned dead terminal hwnd=%s", terminal.window_handle)
 
 
 if __name__ == "__main__":

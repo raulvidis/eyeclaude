@@ -85,3 +85,21 @@ class TestPipeServerIntegration:
             assert state.get_terminal(pid=1234) is None
         finally:
             server.stop()
+
+
+def test_main_loop_prunes_closed_terminals(mocker):
+    """A registered terminal whose HWND is no longer a valid window must be
+    unregistered when _prune_dead_terminals runs."""
+    from eyeclaude.shared_state import SharedState, Quadrant
+    from eyeclaude.cli import _prune_dead_terminals
+
+    state = SharedState()
+    state.register_terminal(pid=111, window_handle=111, quadrant=Quadrant.TOP_LEFT)
+    state.register_terminal(pid=222, window_handle=222, quadrant=Quadrant.TOP_RIGHT)
+
+    mocker.patch("win32gui.IsWindow", side_effect=lambda h: h == 222)
+
+    _prune_dead_terminals(state)
+
+    remaining = [t.window_handle for t in state.get_all_terminals()]
+    assert remaining == [222]
