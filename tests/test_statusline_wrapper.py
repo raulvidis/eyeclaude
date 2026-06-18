@@ -50,3 +50,21 @@ class TestBuildIndicator:
         status_file.write_text("not json")
         result = build_indicator(status_file)
         assert result == ""
+
+    def test_json_array_returns_empty(self, tmp_path):
+        status_file = tmp_path / "1001.json"
+        status_file.write_text(json.dumps([1, 2, 3]))
+        result = build_indicator(status_file)
+        assert result == ""
+
+    def test_json_number_returns_empty(self, tmp_path):
+        status_file = tmp_path / "1001.json"
+        status_file.write_text(json.dumps(42))
+        result = build_indicator(status_file)
+        assert result == ""
+
+    def test_json_string_returns_empty(self, tmp_path):
+        status_file = tmp_path / "1001.json"
+        status_file.write_text(json.dumps("idle"))
+        result = build_indicator(status_file)
+        assert result == ""

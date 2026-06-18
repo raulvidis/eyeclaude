@@ -22,15 +22,22 @@ def build_indicator(status_file: Path) -> str:
     """Read a status JSON file and return the indicator string."""
     try:
         data = json.loads(status_file.read_text(encoding="utf-8"))
-        status = data.get("status", "idle")
-        active = data.get("active", False)
-        emoji = STATUS_EMOJI.get(status, "")
-        if not emoji:
-            return ""
-        if active:
-            return emoji + ACTIVE_INDICATOR
-        return emoji
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        return ""
+
+    if not isinstance(data, dict):
+        return ""
+
+    status = data.get("status", "idle")
+    active = data.get("active", False)
+    emoji = STATUS_EMOJI.get(status, "")
+    if not emoji:
+        return ""
+    if active:
+        return emoji + ACTIVE_INDICATOR
+    return emoji
+
+    if not isinstance(data, dict):
         return ""
 
 
