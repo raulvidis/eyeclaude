@@ -56,3 +56,21 @@ class TestConfigPersistence:
         config_path.write_text("not valid json{{{")
         config = load_config(config_path)
         assert config.dwell_time_ms == 400
+
+    def test_json_array_returns_default(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps([1, 2, 3]))
+        config = load_config(config_path)
+        assert config.dwell_time_ms == 400
+
+    def test_json_number_returns_default(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps(42))
+        config = load_config(config_path)
+        assert config.dwell_time_ms == 400
+
+    def test_json_string_returns_default(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps("idle"))
+        config = load_config(config_path)
+        assert config.dwell_time_ms == 400

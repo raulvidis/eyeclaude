@@ -35,9 +35,13 @@ def save_config(config: EyeClaudeConfig, path: Path = DEFAULT_CONFIG_PATH) -> No
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> EyeClaudeConfig:
     try:
         data = json.loads(path.read_text())
-        return EyeClaudeConfig(**{
-            k: v for k, v in data.items()
-            if k in EyeClaudeConfig.__dataclass_fields__
-        })
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
         return EyeClaudeConfig()
+
+    if not isinstance(data, dict):
+        return EyeClaudeConfig()
+
+    return EyeClaudeConfig(**{
+        k: v for k, v in data.items()
+        if k in EyeClaudeConfig.__dataclass_fields__
+    })
