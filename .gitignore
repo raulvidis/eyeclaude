@@ -12,4 +12,6 @@ build/
 .opencode/commands
 # But .agents/ is tracked — it's the canonical source for all cross-agent commands
 !/.agents/
+# ...except the shared-skills symlink, which is per-machine (recreate via agent-repo-standards/link-skills.sh)
+/.agents/skills
 

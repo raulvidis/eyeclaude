@@ -42,4 +42,4 @@ Every doc in `docs/` carries YAML frontmatter (`summary:` + `read_when:`). Agent
 
 | Doc | Summary |
 |---|---|
-| [superpowers/plans/2026-05-21-eyeclaude-critical-fixes.md](superpowers/plans/2026-05-21-eyeclaude-critical-fixes.md) | Historical critical-fixes plan (no frontmatter) |
+| [archive/2026-05-21-eyeclaude-critical-fixes.md](archive/2026-05-21-eyeclaude-critical-fixes.md) | Historical critical-fixes plan (no frontmatter; lives in `docs/archive/`, skipped by `docs-list`) |
