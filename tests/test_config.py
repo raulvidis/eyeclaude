@@ -74,3 +74,46 @@ class TestConfigPersistence:
         config_path.write_text(json.dumps("idle"))
         config = load_config(config_path)
         assert config.dwell_time_ms == 400
+
+
+class TestBorderColorsMerge:
+    def test_partial_border_colors_merged(self, tmp_path):
+        """A file with only some border_colors keys merges over the defaults."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"border_colors": {"working": "#123456"}}))
+        config = load_config(config_path)
+        assert config.border_colors["idle"] == "#00FF00"
+        assert config.border_colors["working"] == "#123456"
+        assert config.border_colors["finished"] == "#FFD700"
+        assert config.border_colors["error"] == "#FF0000"
+
+    def test_full_border_colors_overrides_all(self, tmp_path):
+        """A file with all four border_colors keys overrides all defaults."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({
+            "border_colors": {
+                "idle": "#AABBCC",
+                "working": "#112233",
+                "finished": "#445566",
+                "error": "#778899",
+            }
+        }))
+        config = load_config(config_path)
+        assert config.border_colors == {
+            "idle": "#AABBCC",
+            "working": "#112233",
+            "finished": "#445566",
+            "error": "#778899",
+        }
+
+    def test_absent_border_colors_yields_all_defaults(self, tmp_path):
+        """A file with no border_colors key yields all four default colors."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"dwell_time_ms": 500}))
+        config = load_config(config_path)
+        assert config.border_colors == {
+            "idle": "#00FF00",
+            "working": "#0088FF",
+            "finished": "#FFD700",
+            "error": "#FF0000",
+        }

@@ -41,6 +41,14 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> EyeClaudeConfig:
     if not isinstance(data, dict):
         return EyeClaudeConfig()
 
+    # Merge partial border_colors over the defaults so that a file that
+    # specifies only some color keys doesn't replace the whole dict.
+    if "border_colors" in data and isinstance(data["border_colors"], dict):
+        merged = dict(DEFAULT_BORDER_COLORS)
+        merged.update(data["border_colors"])
+        data = dict(data)
+        data["border_colors"] = merged
+
     return EyeClaudeConfig(**{
         k: v for k, v in data.items()
         if k in EyeClaudeConfig.__dataclass_fields__
