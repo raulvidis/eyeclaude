@@ -5,3 +5,11 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Cross-agent symlinks (not tracked in git)
+.claude/commands
+.cursor/commands
+.opencode/commands
+# But .agents/ is tracked — it's the canonical source for all cross-agent commands
+!/.agents/
+

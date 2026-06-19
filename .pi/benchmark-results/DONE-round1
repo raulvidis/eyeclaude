@@ -1,0 +1,19 @@
+{
+  "completed_at": "2026-05-24T07:34:32.984395+00:00",
+  "elapsed_minutes": 110.44799255333298,
+  "models": [
+    "qwen3.6-35b-a3b-q8",
+    "qwopus3.6-35b-a3b-v1-q4km",
+    "gemma4-26b-a4b-q8",
+    "minimax-m2.7-iq3_xxs",
+    "minimax-m2.7-iq4_xs",
+    "qwopus3.6-27b-v2-q6k"
+  ],
+  "tasks": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ]
+}

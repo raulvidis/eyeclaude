@@ -1,0 +1,10 @@
+{
+  "completed_at": "2026-06-18T10:55:02.806194+00:00",
+  "elapsed_minutes": 1.002011151666132,
+  "models": [
+    "qwopus3.6-35b-v1-q4km-8081-t5retry"
+  ],
+  "tasks": [
+    5
+  ]
+}

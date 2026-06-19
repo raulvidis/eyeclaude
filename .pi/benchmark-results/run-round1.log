@@ -1,0 +1,128 @@
+[2026-05-24T05:44:06Z] endpoint=http://10.97.2.98:9292/v1/chat/completions models=['qwen3.6-35b-a3b-q8', 'qwopus3.6-35b-a3b-v1-q4km', 'gemma4-26b-a4b-q8', 'minimax-m2.7-iq3_xxs', 'minimax-m2.7-iq4_xs', 'qwopus3.6-27b-v2-q6k'] tasks=[1, 2, 3, 4, 5]
+[2026-05-24T05:44:06Z] === model=qwen3.6-35b-a3b-q8 (id=qwen3.6-35b-a3b-q8_0) ===
+[2026-05-24T05:44:06Z]   task 1: reset to 2fd7d38
+[2026-05-24T05:44:06Z]   task 1: starting agent loop
+[2026-05-24T05:45:05Z]   task 1: done iterations=9 stop=stop duration=59310ms
+[2026-05-24T05:45:09Z]   task 1: score=100/100 committed=True tests=True scope=True
+[2026-05-24T05:45:09Z]   task 2: reset to 2fd7d38
+[2026-05-24T05:45:09Z]   task 2: starting agent loop
+[2026-05-24T05:46:19Z]   task 2: done iterations=9 stop=stop duration=69944ms
+[2026-05-24T05:46:23Z]   task 2: score=97/100 committed=True tests=True scope=True
+[2026-05-24T05:46:23Z]   task 3: reset to 2fd7d38
+[2026-05-24T05:46:23Z]   task 3: starting agent loop
+[2026-05-24T05:48:29Z]   task 3: done iterations=14 stop=stop duration=125595ms
+[2026-05-24T05:48:33Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-05-24T05:48:33Z]   task 4: reset to 2fd7d38
+[2026-05-24T05:48:33Z]   task 4: starting agent loop
+[2026-05-24T05:49:41Z]   task 4: done iterations=14 stop=stop duration=68055ms
+[2026-05-24T05:49:45Z]   task 4: score=97/100 committed=True tests=True scope=True
+[2026-05-24T05:49:45Z]   task 5: reset to 2fd7d38
+[2026-05-24T05:49:45Z]   task 5: starting agent loop
+[2026-05-24T06:00:28Z]   task 5: done iterations=8 stop=http error: timed out duration=642776ms
+[2026-05-24T06:00:32Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:00:32Z] === model=qwopus3.6-35b-a3b-v1-q4km (id=qwopus3.6-35b-a3b-v1-q4_k_m) ===
+[2026-05-24T06:00:32Z]   task 1: reset to 2fd7d38
+[2026-05-24T06:00:32Z]   task 1: starting agent loop
+[2026-05-24T06:01:29Z]   task 1: done iterations=7 stop=stop duration=56897ms
+[2026-05-24T06:01:33Z]   task 1: score=100/100 committed=True tests=True scope=True
+[2026-05-24T06:01:33Z]   task 2: reset to 2fd7d38
+[2026-05-24T06:01:33Z]   task 2: starting agent loop
+[2026-05-24T06:02:27Z]   task 2: done iterations=7 stop=stop duration=53598ms
+[2026-05-24T06:02:31Z]   task 2: score=100/100 committed=True tests=True scope=True
+[2026-05-24T06:02:31Z]   task 3: reset to 2fd7d38
+[2026-05-24T06:02:31Z]   task 3: starting agent loop
+[2026-05-24T06:04:28Z]   task 3: done iterations=15 stop=stop duration=116457ms
+[2026-05-24T06:04:32Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-05-24T06:04:32Z]   task 4: reset to 2fd7d38
+[2026-05-24T06:04:32Z]   task 4: starting agent loop
+[2026-05-24T06:05:17Z]   task 4: done iterations=12 stop=stop duration=45630ms
+[2026-05-24T06:05:22Z]   task 4: score=100/100 committed=True tests=True scope=True
+[2026-05-24T06:05:22Z]   task 5: reset to 2fd7d38
+[2026-05-24T06:05:22Z]   task 5: starting agent loop
+[2026-05-24T06:06:28Z]   task 5: done iterations=13 stop=stop duration=65962ms
+[2026-05-24T06:06:32Z]   task 5: score=97/100 committed=True tests=True scope=True
+[2026-05-24T06:06:32Z] === model=gemma4-26b-a4b-q8 (id=gemma4-26b-a4b-q8_0) ===
+[2026-05-24T06:06:32Z]   task 1: reset to 2fd7d38
+[2026-05-24T06:06:32Z]   task 1: starting agent loop
+[2026-05-24T06:08:16Z]   task 1: done iterations=9 stop=stop duration=104674ms
+[2026-05-24T06:08:20Z]   task 1: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:08:20Z]   task 2: reset to 2fd7d38
+[2026-05-24T06:08:20Z]   task 2: starting agent loop
+[2026-05-24T06:11:02Z]   task 2: done iterations=9 stop=stop duration=161710ms
+[2026-05-24T06:11:06Z]   task 2: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:11:06Z]   task 3: reset to 2fd7d38
+[2026-05-24T06:11:06Z]   task 3: starting agent loop
+[2026-05-24T06:12:48Z]   task 3: done iterations=14 stop=stop duration=101653ms
+[2026-05-24T06:12:52Z]   task 3: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:12:52Z]   task 4: reset to 2fd7d38
+[2026-05-24T06:12:52Z]   task 4: starting agent loop
+[2026-05-24T06:14:32Z]   task 4: done iterations=15 stop=stop duration=100150ms
+[2026-05-24T06:14:36Z]   task 4: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:14:36Z]   task 5: reset to 2fd7d38
+[2026-05-24T06:14:36Z]   task 5: starting agent loop
+[2026-05-24T06:16:11Z]   task 5: done iterations=11 stop=stop duration=94101ms
+[2026-05-24T06:16:15Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T06:16:15Z] === model=minimax-m2.7-iq3_xxs (id=minimax-m2.7-iq3_xxs) ===
+[2026-05-24T06:16:15Z]   task 1: reset to 2fd7d38
+[2026-05-24T06:16:15Z]   task 1: starting agent loop
+[2026-05-24T06:25:33Z]   task 1: done iterations=31 stop=stop duration=558215ms
+[2026-05-24T06:25:37Z]   task 1: score=91/100 committed=True tests=True scope=True
+[2026-05-24T06:25:37Z]   task 2: reset to 2fd7d38
+[2026-05-24T06:25:37Z]   task 2: starting agent loop
+[2026-05-24T06:29:56Z]   task 2: done iterations=8 stop=stop duration=259263ms
+[2026-05-24T06:30:00Z]   task 2: score=94/100 committed=True tests=True scope=True
+[2026-05-24T06:30:00Z]   task 3: reset to 2fd7d38
+[2026-05-24T06:30:00Z]   task 3: starting agent loop
+[2026-05-24T06:38:10Z]   task 3: done iterations=12 stop=stop duration=489733ms
+[2026-05-24T06:38:14Z]   task 3: score=91/100 committed=True tests=True scope=True
+[2026-05-24T06:38:14Z]   task 4: reset to 2fd7d38
+[2026-05-24T06:38:14Z]   task 4: starting agent loop
+[2026-05-24T06:40:30Z]   task 4: done iterations=8 stop=stop duration=136041ms
+[2026-05-24T06:40:35Z]   task 4: score=97/100 committed=True tests=True scope=True
+[2026-05-24T06:40:35Z]   task 5: reset to 2fd7d38
+[2026-05-24T06:40:35Z]   task 5: starting agent loop
+[2026-05-24T06:45:58Z]   task 5: done iterations=13 stop=stop duration=323023ms
+[2026-05-24T06:46:02Z]   task 5: score=94/100 committed=True tests=True scope=True
+[2026-05-24T06:46:02Z] === model=minimax-m2.7-iq4_xs (id=minimax-m2.7-iq4_xs) ===
+[2026-05-24T06:46:02Z]   task 1: reset to 2fd7d38
+[2026-05-24T06:46:02Z]   task 1: starting agent loop
+[2026-05-24T06:57:02Z]   task 1: done iterations=36 stop=http 502:  duration=660249ms
+[2026-05-24T06:57:06Z]   task 1: score=81/100 committed=True tests=True scope=True
+[2026-05-24T06:57:06Z]   task 2: reset to 2fd7d38
+[2026-05-24T06:57:06Z]   task 2: starting agent loop
+[2026-05-24T07:01:49Z]   task 2: done iterations=8 stop=stop duration=282396ms
+[2026-05-24T07:01:53Z]   task 2: score=94/100 committed=True tests=True scope=True
+[2026-05-24T07:01:53Z]   task 3: reset to 2fd7d38
+[2026-05-24T07:01:53Z]   task 3: starting agent loop
+[2026-05-24T07:02:13Z]   task 3: done iterations=1 stop=http 502:  duration=20538ms
+[2026-05-24T07:02:18Z]   task 3: score=0/100 committed=False tests=True scope=True
+[2026-05-24T07:02:18Z]   task 4: reset to 2fd7d38
+[2026-05-24T07:02:18Z]   task 4: starting agent loop
+[2026-05-24T07:03:44Z]   task 4: done iterations=2 stop=http 502:  duration=86825ms
+[2026-05-24T07:03:49Z]   task 4: score=0/100 committed=False tests=True scope=True
+[2026-05-24T07:03:49Z]   task 5: reset to 2fd7d38
+[2026-05-24T07:03:49Z]   task 5: starting agent loop
+[2026-05-24T07:04:43Z]   task 5: done iterations=2 stop=http 502:  duration=54777ms
+[2026-05-24T07:04:47Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T07:04:47Z] === model=qwopus3.6-27b-v2-q6k (id=qwopus3.6-27b-v2-q6_k) ===
+[2026-05-24T07:04:47Z]   task 1: reset to 2fd7d38
+[2026-05-24T07:04:47Z]   task 1: starting agent loop
+[2026-05-24T07:12:25Z]   task 1: done iterations=24 stop=stop duration=457790ms
+[2026-05-24T07:12:29Z]   task 1: score=91/100 committed=True tests=True scope=True
+[2026-05-24T07:12:29Z]   task 2: reset to 2fd7d38
+[2026-05-24T07:12:29Z]   task 2: starting agent loop
+[2026-05-24T07:17:19Z]   task 2: done iterations=10 stop=stop duration=289062ms
+[2026-05-24T07:17:23Z]   task 2: score=94/100 committed=True tests=True scope=True
+[2026-05-24T07:17:23Z]   task 3: reset to 2fd7d38
+[2026-05-24T07:17:23Z]   task 3: starting agent loop
+[2026-05-24T07:25:04Z]   task 3: done iterations=17 stop=stop duration=461491ms
+[2026-05-24T07:25:08Z]   task 3: score=91/100 committed=True tests=True scope=True
+[2026-05-24T07:25:08Z]   task 4: reset to 2fd7d38
+[2026-05-24T07:25:08Z]   task 4: starting agent loop
+[2026-05-24T07:28:50Z]   task 4: done iterations=12 stop=stop duration=221683ms
+[2026-05-24T07:28:54Z]   task 4: score=94/100 committed=True tests=True scope=True
+[2026-05-24T07:28:54Z]   task 5: reset to 2fd7d38
+[2026-05-24T07:28:54Z]   task 5: starting agent loop
+[2026-05-24T07:34:28Z]   task 5: done iterations=15 stop=stop duration=333940ms
+[2026-05-24T07:34:32Z]   task 5: score=94/100 committed=True tests=True scope=True
+[2026-05-24T07:34:32Z] sweep complete in 110.4 min

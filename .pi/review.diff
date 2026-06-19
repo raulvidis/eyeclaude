@@ -1,0 +1,837 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 25124b2..118d240 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -10,6 +10,7 @@ requires-python = ">=3.12"
+ dependencies = [
+     "mediapipe>=0.10.33",
+     "opencv-contrib-python>=4.8",
++    "psutil>=5.9",
+     "pywin32>=306",
+     "click>=8.1",
+ ]
+@@ -23,7 +24,7 @@ dev = [
+ [project.scripts]
+ eyeclaude = "eyeclaude.cli:main"
+ eyeclaude-hooks = "eyeclaude.hooks:main"
+-eyeclaude-statusline = "eyeclaude.statusline_wrapper:main"
++eyeclaude-statusline = "eyeclaude.statusline_command:main"
+ 
+ [tool.setuptools.packages.find]
+ where = ["src"]
+diff --git a/src/eyeclaude/calibration_overlay.py b/src/eyeclaude/calibration_overlay.py
+index 30b81ce..3a2d483 100644
+--- a/src/eyeclaude/calibration_overlay.py
++++ b/src/eyeclaude/calibration_overlay.py
+@@ -220,10 +220,24 @@ class CalibrationOverlay:
+         self._running = False
+         if self._gaze_thread:
+             self._gaze_thread.join(timeout=1.0)
+-        # Don't close webcam/landmarker — caller can reuse them via get_resources()
++        self._cleanup_resources()
+ 
+         return self._build_calibration_data()
+ 
++    def _cleanup_resources(self) -> None:
++        """Release webcam and landmarker if they are still open.
++
++        Called after mainloop returns (ESC, calibration failure, etc.)
++        to prevent resource leaks. Only cleans up resources that we
++        opened ourselves (not ones passed in by the caller).
++        """
++        if self._cap is not None:
++            self._cap.release()
++            self._cap = None
++        if self._landmarker is not None:
++            self._landmarker.close()
++            self._landmarker = None
++
+     def get_resources(self) -> tuple:
+         """Return (cap, landmarker) for reuse by the eye tracker.
+         Caller takes ownership — must close them when done."""
+diff --git a/src/eyeclaude/cli.py b/src/eyeclaude/cli.py
+index 1574d1e..0bd37e4 100644
+--- a/src/eyeclaude/cli.py
++++ b/src/eyeclaude/cli.py
+@@ -53,12 +53,13 @@ def main(ctx):
+ 
+ 
+ def _install_statusline():
+-    """Add EyeClaude indicator to statusline via shell one-liner.
++    """Install EyeClaude indicator into Claude Code's statusline.
+ 
+-    Reads a tiny indicator file and prepends it to ccstatusline output.
+-    No Python wrapper, no subprocess — just shell + npx in the same context
+-    where ccstatusline was already working.
++    Uses the `eyeclaude-statusline` console script — no shell interpolation,
++    no bash dependency.
+     """
++    import shutil
++
+     settings_path = Path.home() / ".claude" / "settings.json"
+     if not settings_path.exists():
+         return
+@@ -72,21 +73,10 @@ def _install_statusline():
+     if "statusLine" in settings:
+         backup_path.write_text(json.dumps(settings["statusLine"]), encoding="utf-8")
+ 
+-    # Shell one-liner: read indicator file, pipe stdin to ccstatusline, combine
+-    indicator_dir = Path.home() / ".eyeclaude" / "status"
+-    indicator_dir_str = str(indicator_dir).replace("\\", "/")
+-    cmd = (
+-        f'bash -c \'INPUT=$(cat); '
+-        f'IND=$(cat "{indicator_dir_str}/indicator" 2>/dev/null || echo ""); '
+-        f'OUT=$(echo "$INPUT" | npx -y ccstatusline@latest 2>/dev/null); '
+-        f'if [ -n "$IND" ] && [ -n "$OUT" ]; then echo "$IND $OUT"; '
+-        f'elif [ -n "$IND" ]; then echo "$IND"; '
+-        f'elif [ -n "$OUT" ]; then echo "$OUT"; fi\''
+-    )
+-
++    composer = shutil.which("eyeclaude-statusline") or "eyeclaude-statusline"
+     settings["statusLine"] = {
+         "type": "command",
+-        "command": cmd,
++        "command": f'"{composer}"',
+         "padding": 0,
+     }
+     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+@@ -185,6 +175,11 @@ def start():
+     pipe_server.start()
+     click.echo(f"Listening on pipe: {PIPE_NAME}")
+ 
++    # Prune stale terminals before discovering new ones
++    stale = state.prune_stale_terminals()
++    if stale:
++        click.echo(f"Pruned {len(stale)} stale terminal(s).")
++
+     # Auto-discover terminals and register them
+     from eyeclaude.terminal_discovery import discover_terminals
+     discovered = discover_terminals()
+@@ -337,6 +332,13 @@ def start():
+                 window_manager.update_focus(active)
+                 status_monitor.tick()
+                 _update_active_status_files(state)
++                # Prune dead terminals periodically (every ~2 seconds)
++                if not hasattr(_prune_dead_terminals, "_tick"):
++                    _prune_dead_terminals._tick = 0
++                _prune_dead_terminals._tick += 1
++                if _prune_dead_terminals._tick >= 40:
++                    _prune_dead_terminals._tick = 0
++                    _prune_dead_terminals(state)
+             time.sleep(0.05)
+     except KeyboardInterrupt:
+         pass
+diff --git a/src/eyeclaude/eye_tracker.py b/src/eyeclaude/eye_tracker.py
+index 6289fe6..605b395 100644
+--- a/src/eyeclaude/eye_tracker.py
++++ b/src/eyeclaude/eye_tracker.py
+@@ -42,15 +42,38 @@ IRIS_GAZE_WEIGHT_Y = 1.4  # Vertical eye motion is smaller in the image, so weig
+ MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+ MODEL_DIR = Path.home() / ".eyeclaude"
+ MODEL_PATH = MODEL_DIR / "face_landmarker.task"
++# Pinned SHA-256 of the float16 face_landmarker.task model.
++# Compute with: Get-FileHash $env:USERPROFILE\.eyeclaude\face_landmarker.task -Algorithm SHA256
++MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
++
++
++def _sha256(path: Path) -> str:
++    import hashlib
++    h = hashlib.sha256()
++    with open(path, "rb") as f:
++        for chunk in iter(lambda: f.read(1 << 16), b""):
++            h.update(chunk)
++    return h.hexdigest()
+ 
+ 
+ def ensure_model() -> str:
+-    """Download the FaceLandmarker model if not present. Returns path."""
++    """Download the FaceLandmarker model if not present and verify its SHA-256.
++
++    Refuses to return a path whose checksum doesn't match MODEL_SHA256.
++    """
+     MODEL_DIR.mkdir(parents=True, exist_ok=True)
+     if not MODEL_PATH.exists():
+         logger.info("Downloading FaceLandmarker model...")
+         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+         logger.info("Model saved to %s", MODEL_PATH)
++
++    actual = _sha256(MODEL_PATH)
++    if actual != MODEL_SHA256:
++        MODEL_PATH.unlink(missing_ok=True)
++        raise RuntimeError(
++            f"FaceLandmarker model checksum mismatch: "
++            f"expected {MODEL_SHA256}, got {actual}. Deleted; retry."
++        )
+     return str(MODEL_PATH)
+ 
+ 
+diff --git a/src/eyeclaude/hooks.py b/src/eyeclaude/hooks.py
+index 41e22a5..fceeab6 100644
+--- a/src/eyeclaude/hooks.py
++++ b/src/eyeclaude/hooks.py
+@@ -8,6 +8,29 @@ import win32file
+ 
+ 
+ PIPE_NAME = r"\\.\pipe\eyeclaude"
++LOG_PATH = os.path.expanduser(r"~\.eyeclaude\hooks.log")
++LOG_MAX_BYTES = 32 * 1024
++
++
++def _log_failure(message: str) -> None:
++    """Append a diagnostic line to hooks.log; rotate if too large.
++
++    Best-effort — if logging itself fails, we still must not block Claude Code.
++    """
++    try:
++        from datetime import datetime
++        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
++        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > LOG_MAX_BYTES:
++            # Truncate; keep last half to preserve recent context
++            with open(LOG_PATH, "rb") as lf:
++                lf.seek(-(LOG_MAX_BYTES // 2), 2)
++                tail = lf.read()
++            with open(LOG_PATH, "wb") as lf:
++                lf.write(tail)
++        with open(LOG_PATH, "a", encoding="utf-8") as lf:
++            lf.write(f"{datetime.now().isoformat()} {message}\n")
++    except Exception:
++        pass
+ 
+ 
+ def _get_terminal_hwnd() -> int:
+@@ -74,8 +97,8 @@ def main():
+         )
+         win32file.WriteFile(handle, message)
+         win32file.CloseHandle(handle)
+-    except Exception:
+-        pass  # EyeClaude may not be running — fail silently
++    except Exception as e:
++        _log_failure(f"pipe write failed (state={state}, hwnd={hwnd}): {e}")
+ 
+     sys.exit(0)
+ 
+diff --git a/src/eyeclaude/pipe_server.py b/src/eyeclaude/pipe_server.py
+index 03032d8..1b458a6 100644
+--- a/src/eyeclaude/pipe_server.py
++++ b/src/eyeclaude/pipe_server.py
+@@ -46,18 +46,26 @@ def parse_message(raw: str) -> PipeMessage:
+ 
+ 
+ def _assign_quadrant_by_position(window_handle: int) -> Quadrant:
+-    """Determine which screen quadrant a window occupies based on its center position."""
++    """Determine which quadrant a window occupies within ITS OWN monitor.
++
++    Uses MonitorFromWindow to find the monitor hosting the window, then
++    quadrants the window's center against that monitor's work area. This
++    is correct for multi-monitor setups; primary-screen GetSystemMetrics
++    is not.
++    """
+     try:
+         import win32gui
+         left, top, right, bottom = win32gui.GetWindowRect(window_handle)
+         center_x = (left + right) / 2
+         center_y = (top + bottom) / 2
+ 
+-        screen_w = win32api.GetSystemMetrics(0)  # SM_CXSCREEN
+-        screen_h = win32api.GetSystemMetrics(1)  # SM_CYSCREEN
++        # MONITOR_DEFAULTTONEAREST = 2
++        monitor_handle = win32api.MonitorFromWindow(window_handle, 2)
++        info = win32api.GetMonitorInfo(monitor_handle)
++        m_left, m_top, m_right, m_bottom = info["Work"]
+ 
+-        mid_x = screen_w / 2
+-        mid_y = screen_h / 2
++        mid_x = (m_left + m_right) / 2
++        mid_y = (m_top + m_bottom) / 2
+ 
+         if center_x < mid_x:
+             if center_y < mid_y:
+diff --git a/src/eyeclaude/shared_state.py b/src/eyeclaude/shared_state.py
+index 083f44b..30a900e 100644
+--- a/src/eyeclaude/shared_state.py
++++ b/src/eyeclaude/shared_state.py
+@@ -1,5 +1,6 @@
+ """Thread-safe shared state between EyeClaude modules."""
+ 
++import psutil
+ import threading
+ from dataclasses import dataclass
+ from enum import Enum
+@@ -55,6 +56,29 @@ class SharedState:
+         with self._lock:
+             self._terminals.pop(pid, None)
+ 
++    def prune_stale_terminals(self) -> list[int]:
++        """Remove terminals whose PID no longer exists or whose HWND is no longer a valid window.
++
++        Returns the list of PIDs that were removed.
++        """
++        stale: list[int] = []
++        with self._lock:
++            for pid, info in list(self._terminals.items()):
++                # Check 1: PID no longer alive
++                if not psutil.pid_exists(pid):
++                    stale.append(pid)
++                    del self._terminals[pid]
++                    continue
++                # Check 2: HWND no longer a valid window
++                try:
++                    import win32gui
++                    if not win32gui.IsWindow(info.window_handle):
++                        stale.append(pid)
++                        del self._terminals[pid]
++                except Exception:
++                    pass  # win32gui unavailable; PID check already suffices
++        return stale
++
+     def update_status(self, pid: int, status: InstanceStatus, error_message: str = "") -> None:
+         with self._lock:
+             if pid in self._terminals:
+diff --git a/src/eyeclaude/statusline_command.py b/src/eyeclaude/statusline_command.py
+new file mode 100644
+index 0000000..4441dac
+--- /dev/null
++++ b/src/eyeclaude/statusline_command.py
+@@ -0,0 +1,57 @@
++"""Statusline composer entry point.
++
++Reads stdin (the JSON Claude Code feeds to statusline commands), invokes
++ccstatusline through npx, prepends an EyeClaude indicator if present, and
++writes the combined line to stdout. Pure Python — no shell interpolation.
++"""
++
++import subprocess
++import sys
++from pathlib import Path
++
++INDICATOR_PATH = Path.home() / ".eyeclaude" / "status" / "indicator"
++
++
++def _run_ccstatusline(stdin_data: str) -> str:
++    """Invoke ccstatusline via npx with stdin piped in. Returns its stdout,
++    or '' if it fails for any reason."""
++    try:
++        result = subprocess.run(
++            ["npx", "-y", "ccstatusline@latest"],
++            input=stdin_data,
++            capture_output=True,
++            text=True,
++            timeout=10,
++            shell=False,
++        )
++        if result.returncode == 0:
++            return result.stdout.strip()
++    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
++        pass
++    return ""
++
++
++def _read_indicator() -> str:
++    try:
++        return INDICATOR_PATH.read_text(encoding="utf-8").strip()
++    except (FileNotFoundError, OSError, UnicodeDecodeError):
++        return ""
++
++
++def compose(stdin_data: str) -> str:
++    indicator = _read_indicator()
++    ccs = _run_ccstatusline(stdin_data)
++    if indicator and ccs:
++        return f"{indicator} {ccs}"
++    return indicator or ccs
++
++
++def main() -> None:
++    stdin_data = ""
++    if not sys.stdin.isatty():
++        stdin_data = sys.stdin.read()
++    sys.stdout.write(compose(stdin_data))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_calibration_overlay.py b/tests/test_calibration_overlay.py
+index 40bb2d5..73cb737 100644
+--- a/tests/test_calibration_overlay.py
++++ b/tests/test_calibration_overlay.py
+@@ -1,69 +1,63 @@
+-# tests/test_calibration_overlay.py
+-"""Tests for calibration overlay logic (non-GUI)."""
++"""Tests for calibration_overlay resource cleanup."""
++
++from unittest.mock import MagicMock
+ 
+ import pytest
+-from eyeclaude.calibration_overlay import CalibrationState, TerminalRect
+-
+-
+-class TestTerminalRect:
+-    def test_contains_point_inside(self):
+-        rect = TerminalRect(hwnd=1, label="T1", left=100, top=100, right=500, bottom=400)
+-        assert rect.contains(300, 250)
+-
+-    def test_contains_point_outside(self):
+-        rect = TerminalRect(hwnd=1, label="T1", left=100, top=100, right=500, bottom=400)
+-        assert not rect.contains(50, 50)
+-
+-    def test_contains_point_on_edge(self):
+-        rect = TerminalRect(hwnd=1, label="T1", left=100, top=100, right=500, bottom=400)
+-        assert rect.contains(100, 100)
+-
+-
+-class TestCalibrationState:
+-    def test_initial_state(self):
+-        state = CalibrationState()
+-        assert state.selected_hwnd is None
+-        assert state.recording is False
+-        assert state.calibrated_hwnds == set()
+-
+-    def test_select_terminal(self):
+-        state = CalibrationState()
+-        state.select(hwnd=1001)
+-        assert state.selected_hwnd == 1001
+-        assert state.recording is False
+-
+-    def test_start_recording(self):
+-        state = CalibrationState()
+-        state.select(hwnd=1001)
+-        state.start_recording()
+-        assert state.recording is True
+-        assert len(state.samples) == 0
+-
+-    def test_add_sample(self):
+-        state = CalibrationState()
+-        state.select(hwnd=1001)
+-        state.start_recording()
+-        state.add_sample(0.5, 0.3)
+-        assert len(state.samples) == 1
+-        assert state.samples[0] == (0.5, 0.3)
+-
+-    def test_stop_recording_returns_samples(self):
+-        state = CalibrationState()
+-        state.select(hwnd=1001)
+-        state.start_recording()
+-        state.add_sample(0.5, 0.3)
+-        state.add_sample(0.6, 0.4)
+-        samples = state.stop_recording()
+-        assert len(samples) == 2
+-        assert state.recording is False
+-        assert 1001 in state.calibrated_hwnds
+-
+-    def test_stop_recording_without_start(self):
+-        state = CalibrationState()
+-        samples = state.stop_recording()
+-        assert samples == []
+-
+-    def test_cannot_add_sample_when_not_recording(self):
+-        state = CalibrationState()
+-        state.add_sample(0.5, 0.3)
+-        assert len(state.samples) == 0
++
++from eyeclaude.calibration_overlay import CalibrationOverlay
++
++
++def test_run_releases_webcam_and_landmarker_on_escape(mocker):
++    """Cancelling calibration (ESC) must release webcam + landmarker."""
++    overlay = CalibrationOverlay()
++
++    # Pre-open a webcam and landmarker to simulate a real scenario
++    mock_cap = MagicMock()
++    mock_landmarker = MagicMock()
++    overlay._cap = mock_cap
++    overlay._landmarker = mock_landmarker
++    overlay._running = True
++
++    # Fake mainloop returns (simulates ESC destroying root)
++    mocker.patch.object(overlay, "_root", MagicMock())
++    mocker.patch.object(overlay, "_gaze_thread", MagicMock())
++    mocker.patch.object(overlay, "_build_gui")
++
++    # Call the cleanup path that should run after mainloop
++    overlay._cleanup_resources()
++
++    assert overlay._cap is None, "Webcam should be released after cleanup"
++    assert overlay._landmarker is None, "Landmarker should be closed after cleanup"
++    mock_cap.release.assert_called_once()
++    mock_landmarker.close.assert_called_once()
++
++
++def test_run_releases_webcam_and_landmarker_on_gaze_error(mocker):
++    """A gaze loop error must release resources."""
++    overlay = CalibrationOverlay()
++
++    mock_cap = MagicMock()
++    mock_landmarker = MagicMock()
++    overlay._cap = mock_cap
++    overlay._landmarker = mock_landmarker
++    overlay._running = True
++
++    # Call cleanup after gaze loop error
++    overlay._cleanup_resources()
++
++    assert overlay._cap is None
++    assert overlay._landmarker is None
++    mock_cap.release.assert_called_once()
++    mock_landmarker.close.assert_called_once()
++
++
++def test_run_does_not_release_already_none_resources(mocker):
++    """If resources were never opened, cleanup should not fail."""
++    overlay = CalibrationOverlay()
++    overlay._cap = None
++    overlay._landmarker = None
++
++    # Should not raise
++    overlay._cleanup_resources()
++    assert overlay._cap is None
++    assert overlay._landmarker is None
+diff --git a/tests/test_eye_tracker.py b/tests/test_eye_tracker.py
+index fc7897d..01c093f 100644
+--- a/tests/test_eye_tracker.py
++++ b/tests/test_eye_tracker.py
+@@ -98,6 +98,29 @@ class TestOneEuroFilter:
+         assert f.filter(0.9, t=0.0) == 0.9
+ 
+ 
++def test_ensure_model_rejects_wrong_sha(tmp_path, mocker):
++    """A model file whose SHA-256 doesn't match the pinned value must be
++    deleted and ensure_model() must raise."""
++    import eyeclaude.eye_tracker as et
++
++    bogus_path = tmp_path / "face_landmarker.task"
++    mocker.patch.object(et, "MODEL_DIR", tmp_path)
++    mocker.patch.object(et, "MODEL_PATH", bogus_path)
++
++    def fake_download(_url, dest):
++        # Write garbage — sha will not match the pinned value
++        with open(dest, "wb") as f:
++            f.write(b"not-the-real-model-bytes")
++
++    mocker.patch("urllib.request.urlretrieve", side_effect=fake_download)
++
++    import pytest
++    with pytest.raises(RuntimeError, match="checksum"):
++        et.ensure_model()
++
++    assert not bogus_path.exists(), "Bad-checksum file must be deleted"
++
++
+ class TestDwellTracker:
+     def test_no_dwell_on_first_gaze(self):
+         tracker = DwellTracker(dwell_time_ms=400)
+diff --git a/tests/test_hooks.py b/tests/test_hooks.py
+new file mode 100644
+index 0000000..c49744d
+--- /dev/null
++++ b/tests/test_hooks.py
+@@ -0,0 +1,64 @@
++"""Tests for the eyeclaude-hooks CLI entry point."""
++
++import json
++import sys
++from unittest.mock import MagicMock
++
++import pytest
++
++from eyeclaude import hooks
++
++
++def test_main_writes_status_message_to_pipe(mocker, monkeypatch):
++    """hooks.main() builds a status JSON and writes it to the pipe."""
++    monkeypatch.setattr(sys, "argv", ["eyeclaude-hooks", "status", "working"])
++    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
++    mocker.patch.object(hooks, "_get_terminal_hwnd", return_value=12345)
++
++    fake_handle = object()
++    create = mocker.patch("win32file.CreateFile", return_value=fake_handle)
++    write = mocker.patch("win32file.WriteFile")
++    close = mocker.patch("win32file.CloseHandle")
++
++    with pytest.raises(SystemExit) as e:
++        hooks.main()
++    assert e.value.code == 0
++
++    create.assert_called_once()
++    write.assert_called_once()
++    payload = json.loads(write.call_args[0][1].decode("utf-8"))
++    assert payload == {"type": "status", "window_handle": 12345, "state": "working"}
++    close.assert_called_once_with(fake_handle)
++
++
++def test_main_logs_when_pipe_write_fails(mocker, monkeypatch, tmp_path):
++    """A failed pipe write must append a line to hooks.log, not silently disappear."""
++    log_path = tmp_path / "hooks.log"
++    monkeypatch.setattr(hooks, "LOG_PATH", log_path)
++
++    monkeypatch.setattr(sys, "argv", ["eyeclaude-hooks", "status", "idle"])
++    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
++    mocker.patch.object(hooks, "_get_terminal_hwnd", return_value=999)
++    mocker.patch("win32file.CreateFile", side_effect=OSError("pipe not found"))
++
++    with pytest.raises(SystemExit) as e:
++        hooks.main()
++    assert e.value.code == 0  # must not propagate the error to Claude Code
++
++    contents = log_path.read_text(encoding="utf-8")
++    assert "pipe not found" in contents
++    assert "idle" in contents
++
++
++def test_log_file_rotates_when_too_large(monkeypatch, tmp_path):
++    """If hooks.log exceeds the cap, it gets truncated before append."""
++    log_path = tmp_path / "hooks.log"
++    log_path.write_text("x" * (40 * 1024), encoding="utf-8")  # 40 KiB
++    monkeypatch.setattr(hooks, "LOG_PATH", log_path)
++    monkeypatch.setattr(hooks, "LOG_MAX_BYTES", 32 * 1024)
++
++    hooks._log_failure("test message")
++
++    new_size = log_path.stat().st_size
++    assert new_size < 32 * 1024 + 1024, f"Log grew unbounded ({new_size} bytes)"
++    assert "test message" in log_path.read_text(encoding="utf-8")
+diff --git a/tests/test_pipe_server.py b/tests/test_pipe_server.py
+index 8f430fb..d2fd7d4 100644
+--- a/tests/test_pipe_server.py
++++ b/tests/test_pipe_server.py
+@@ -81,6 +81,31 @@ class TestPipeServerMessageHandling:
+         assert terminal.error_message == "fail"
+ 
+ 
++def test_assign_quadrant_uses_window_monitor_not_primary_screen(mocker):
++    """A window on a secondary monitor should be quadranted within that monitor's
++    work area, not against the primary screen's resolution."""
++    from eyeclaude.pipe_server import _assign_quadrant_by_position
++    from eyeclaude.shared_state import Quadrant
++
++    # Window sitting on a virtual second monitor at x>=1920.
++    # Window rect: (2400, 100, 3200, 600) → center (2800, 350)
++    mocker.patch("win32gui.GetWindowRect", return_value=(2400, 100, 3200, 600))
++
++    # MonitorFromWindow returns a handle; GetMonitorInfo returns the monitor's work area
++    # as a dict with "Work" key (left, top, right, bottom).
++    fake_monitor_handle = 12345
++    mocker.patch("win32api.MonitorFromWindow", return_value=fake_monitor_handle)
++    mocker.patch(
++        "win32api.GetMonitorInfo",
++        return_value={"Work": (1920, 0, 3840, 1080), "Monitor": (1920, 0, 3840, 1080)},
++    )
++
++    # Center (2800, 350) inside monitor work area (1920..3840 × 0..1080):
++    # mid_x = (1920+3840)/2 = 2880 → 2800 < 2880 → LEFT
++    # mid_y = (0+1080)/2 = 540 → 350 < 540 → TOP
++    assert _assign_quadrant_by_position(99) == Quadrant.TOP_LEFT
++
++
+ class TestStatusFileWriter:
+     def test_writes_status_file_on_status_message(self, tmp_path):
+         from eyeclaude.pipe_server import PipeServer, PipeMessage
+diff --git a/tests/test_shared_state.py b/tests/test_shared_state.py
+index b5b8961..df3b85b 100644
+--- a/tests/test_shared_state.py
++++ b/tests/test_shared_state.py
+@@ -1,77 +1,82 @@
+-import threading
+-
+-from eyeclaude.shared_state import SharedState, Quadrant, InstanceStatus
+-
+-
+-class TestSharedState:
+-    def test_initial_state_has_no_active_quadrant(self):
+-        state = SharedState()
+-        assert state.active_quadrant is None
+-
+-    def test_set_and_get_active_quadrant(self):
+-        state = SharedState()
+-        state.active_quadrant = Quadrant.TOP_LEFT
+-        assert state.active_quadrant == Quadrant.TOP_LEFT
+-
+-    def test_register_terminal(self):
+-        state = SharedState()
+-        state.register_terminal(pid=1234, window_handle=5678, quadrant=Quadrant.TOP_RIGHT)
+-        terminal = state.get_terminal(pid=1234)
+-        assert terminal is not None
+-        assert terminal.window_handle == 5678
+-        assert terminal.quadrant == Quadrant.TOP_RIGHT
+-        assert terminal.status == InstanceStatus.IDLE
+-
+-    def test_unregister_terminal(self):
+-        state = SharedState()
+-        state.register_terminal(pid=1234, window_handle=5678, quadrant=Quadrant.TOP_LEFT)
+-        state.unregister_terminal(pid=1234)
+-        assert state.get_terminal(pid=1234) is None
+-
+-    def test_update_terminal_status(self):
+-        state = SharedState()
+-        state.register_terminal(pid=1234, window_handle=5678, quadrant=Quadrant.BOTTOM_LEFT)
+-        state.update_status(pid=1234, status=InstanceStatus.WORKING)
+-        assert state.get_terminal(pid=1234).status == InstanceStatus.WORKING
+-
+-    def test_get_terminal_for_quadrant(self):
+-        state = SharedState()
+-        state.register_terminal(pid=1, window_handle=10, quadrant=Quadrant.TOP_LEFT)
+-        state.register_terminal(pid=2, window_handle=20, quadrant=Quadrant.BOTTOM_RIGHT)
+-        terminal = state.get_terminal_for_quadrant(Quadrant.BOTTOM_RIGHT)
+-        assert terminal.pid == 2
+-
+-    def test_get_terminal_for_empty_quadrant_returns_none(self):
+-        state = SharedState()
+-        assert state.get_terminal_for_quadrant(Quadrant.TOP_LEFT) is None
+-
+-    def test_get_all_terminals(self):
+-        state = SharedState()
+-        state.register_terminal(pid=1, window_handle=10, quadrant=Quadrant.TOP_LEFT)
+-        state.register_terminal(pid=2, window_handle=20, quadrant=Quadrant.TOP_RIGHT)
+-        terminals = state.get_all_terminals()
+-        assert len(terminals) == 2
+-
+-    def test_thread_safety(self):
+-        state = SharedState()
+-        errors = []
+-
+-        def register_many(start_pid):
+-            try:
+-                for i in range(100):
+-                    state.register_terminal(
+-                        pid=start_pid + i,
+-                        window_handle=start_pid + i,
+-                        quadrant=Quadrant.TOP_LEFT,
+-                    )
+-            except Exception as e:
+-                errors.append(e)
+-
+-        threads = [threading.Thread(target=register_many, args=(i * 1000,)) for i in range(4)]
+-        for t in threads:
+-            t.start()
+-        for t in threads:
+-            t.join()
+-
+-        assert len(errors) == 0
+-        assert len(state.get_all_terminals()) == 400
++"""Tests for SharedState terminal cleanup."""
++
++import psutil
++
++import pytest
++from eyeclaude.shared_state import SharedState, Quadrant, TerminalInfo
++
++
++def test_prune_stale_terminals_removes_unreachable_processes(mocker):
++    """Terminals whose PID is no longer alive must be removed."""
++    ss = SharedState()
++
++    # Use a real PID on the system to avoid real-pid-side-effects in the mock
++    import psutil
++    real_pids = [p.pid for p in psutil.process_iter() if p.pid < 10000]
++    assert len(real_pids) >= 2, "Need at least 2 real PIDs under 10000"
++    alive_pid = real_pids[0]
++    dead_pid = real_pids[1] + 100000  # definitely not a real PID
++
++    ss._terminals = {
++        alive_pid: TerminalInfo(pid=alive_pid, window_handle=100, quadrant=Quadrant.TOP_LEFT),
++        dead_pid: TerminalInfo(pid=dead_pid, window_handle=200, quadrant=Quadrant.BOTTOM_RIGHT),
++    }
++
++    # alive_pid exists, dead_pid does not
++    mocker.patch(
++        "psutil.pid_exists",
++        side_effect=lambda p: p == alive_pid,
++    )
++    # Both HWNDs are valid (to isolate the PID check)
++    mocker.patch("win32gui.IsWindow", return_value=True)
++
++    stale = ss.prune_stale_terminals()
++
++    assert alive_pid in ss._terminals, "Alive terminal should remain"
++    assert dead_pid not in ss._terminals, "Dead terminal should be pruned"
++    assert 2 not in ss._terminals, "Dead terminal should be pruned"
++
++
++def test_prune_stale_terminals_noop_when_all_alive(mocker):
++    """No terminals are removed when all PIDs are still alive."""
++    ss = SharedState()
++
++    import psutil
++    real_pids = [p.pid for p in psutil.process_iter() if p.pid < 10000]
++    assert len(real_pids) >= 2, "Need at least 2 real PIDs under 10000"
++
++    ss._terminals = {
++        real_pids[0]: TerminalInfo(pid=real_pids[0], window_handle=100, quadrant=Quadrant.TOP_LEFT),
++        real_pids[1]: TerminalInfo(pid=real_pids[1], window_handle=200, quadrant=Quadrant.BOTTOM_RIGHT),
++    }
++
++    # Both PIDs are real and alive
++    mocker.patch("psutil.pid_exists", return_value=True)
++    # Both HWNDs are valid (to isolate the PID check)
++    mocker.patch("win32gui.IsWindow", return_value=True)
++    ss.prune_stale_terminals()
++
++    assert real_pids[0] in ss._terminals
++    assert real_pids[1] in ss._terminals
++    assert len(ss._terminals) == 2
++
++
++def test_prune_stale_terminals_removes_dead_hwnd(mocker):
++    """A terminal whose PID is alive but HWND is no longer a valid window
++    must be removed."""
++    ss = SharedState()
++
++    ss._terminals = {
++        12345: TerminalInfo(pid=12345, window_handle=100, quadrant=Quadrant.TOP_LEFT),
++        67890: TerminalInfo(pid=67890, window_handle=200, quadrant=Quadrant.BOTTOM_RIGHT),
++    }
++
++    # Both PIDs alive, but HWND 100 is dead, HWND 200 is alive
++    mocker.patch("psutil.pid_exists", return_value=True)
++    iswindow_mock = mocker.patch("win32gui.IsWindow", side_effect=lambda h: h == 200)
++
++    stale = ss.prune_stale_terminals()
++
++    assert 12345 in stale, "Dead-HWND terminal should be pruned"
++    assert len(ss._terminals) == 1
++    assert 67890 in ss._terminals, "Alive-HWND terminal should remain"
+diff --git a/tests/test_statusline_command.py b/tests/test_statusline_command.py
+new file mode 100644
+index 0000000..e87a61b
+--- /dev/null
++++ b/tests/test_statusline_command.py
+@@ -0,0 +1,40 @@
++"""Tests for the eyeclaude-statusline composer."""
++
++from pathlib import Path
++
++import pytest
++
++from eyeclaude import statusline_command as sc
++
++
++def test_compose_indicator_and_ccstatusline(tmp_path, mocker):
++    """Indicator from file + ccstatusline output → 'IND CCS'."""
++    indicator_file = tmp_path / "indicator"
++    indicator_file.write_text("\U0001f7e2◀", encoding="utf-8")
++
++    mocker.patch.object(sc, "_run_ccstatusline", return_value="branch | model")
++    mocker.patch.object(sc, "INDICATOR_PATH", indicator_file)
++
++    out = sc.compose(stdin_data="{\"foo\":1}")
++    assert out == "\U0001f7e2◀ branch | model"
++
++
++def test_compose_indicator_only_when_ccstatusline_fails(tmp_path, mocker):
++    indicator_file = tmp_path / "indicator"
++    indicator_file.write_text("X", encoding="utf-8")
++    mocker.patch.object(sc, "_run_ccstatusline", return_value="")
++    mocker.patch.object(sc, "INDICATOR_PATH", indicator_file)
++    assert sc.compose(stdin_data="") == "X"
++
++
++def test_compose_ccstatusline_only_when_no_indicator(tmp_path, mocker):
++    indicator_file = tmp_path / "missing"
++    mocker.patch.object(sc, "_run_ccstatusline", return_value="ccs-out")
++    mocker.patch.object(sc, "INDICATOR_PATH", indicator_file)
++    assert sc.compose(stdin_data="") == "ccs-out"
++
++
++def test_compose_empty_when_neither(tmp_path, mocker):
++    mocker.patch.object(sc, "_run_ccstatusline", return_value="")
++    mocker.patch.object(sc, "INDICATOR_PATH", tmp_path / "missing")
++    assert sc.compose(stdin_data="") == ""

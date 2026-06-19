@@ -1,0 +1,7 @@
+[2026-06-18T11:22:31Z] endpoint=http://10.97.2.98:8081/v1/chat/completions models=['qwopus3.6-35b-v1-q4km-8081-nothink-t5retry'] tasks=[5]
+[2026-06-18T11:22:31Z] === model=qwopus3.6-35b-v1-q4km-8081-nothink-t5retry (id=Qwopus3.6-35B-A3B-v1-Q4_K_M.gguf) ===
+[2026-06-18T11:22:31Z]   task 5: reset to 2fd7d38
+[2026-06-18T11:22:31Z]   task 5: starting agent loop
+[2026-06-18T11:23:04Z]   task 5: done iterations=14 stop=stop duration=32806ms
+[2026-06-18T11:23:08Z]   task 5: score=100/100 committed=True tests=True scope=True
+[2026-06-18T11:23:08Z] sweep complete in 0.6 min

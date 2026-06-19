@@ -1,0 +1,86 @@
+[2026-05-24T07:42:59Z] endpoint=http://10.97.2.98:9292/v1/chat/completions models=['qwopus3.5-9b-coder-q8', 'qwopus3.6-35b-a3b-v1-q8', 'qwen3.6-35b-a3b-q8-retry', 'gemma4-26b-a4b-q8-retry'] tasks=[1, 2, 3, 4, 5]
+[2026-05-24T07:42:59Z] === model=qwopus3.5-9b-coder-q8 (id=qwopus3.5-9b-coder-q8_0) ===
+[2026-05-24T07:42:59Z]   task 1: reset to 2fd7d38
+[2026-05-24T07:42:59Z]   task 1: starting agent loop
+[2026-05-24T07:51:32Z]   task 1: done iterations=80 stop=max_iterations duration=513621ms
+[2026-05-24T07:51:37Z]   task 1: score=0/100 committed=False tests=True scope=True
+[2026-05-24T07:51:37Z]   task 2: reset to 2fd7d38
+[2026-05-24T07:51:37Z]   task 2: starting agent loop
+[2026-05-24T07:57:44Z]   task 2: done iterations=80 stop=max_iterations duration=366988ms
+[2026-05-24T07:57:48Z]   task 2: score=0/100 committed=False tests=False scope=True
+[2026-05-24T07:57:48Z]   task 3: reset to 2fd7d38
+[2026-05-24T07:57:48Z]   task 3: starting agent loop
+[2026-05-24T08:05:20Z]   task 3: done iterations=80 stop=max_iterations duration=451809ms
+[2026-05-24T08:05:21Z]   task 3: score=0/100 committed=False tests=False scope=True
+[2026-05-24T08:05:21Z]   task 4: reset to 2fd7d38
+[2026-05-24T08:05:21Z]   task 4: starting agent loop
+[2026-05-24T08:09:48Z]   task 4: done iterations=76 stop=http error: Remote end closed connection without response duration=266587ms
+[2026-05-24T08:09:52Z]   task 4: score=0/100 committed=False tests=False scope=True
+[2026-05-24T08:09:52Z]   task 5: reset to 2fd7d38
+[2026-05-24T08:09:52Z]   task 5: starting agent loop
+[2026-05-24T08:10:26Z]   task 5: done iterations=4 stop=http error: Remote end closed connection without response duration=34123ms
+[2026-05-24T08:10:31Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:10:31Z] === model=qwopus3.6-35b-a3b-v1-q8 (id=qwopus3.6-35b-a3b-v1-q8_0) ===
+[2026-05-24T08:10:31Z]   task 1: reset to 2fd7d38
+[2026-05-24T08:10:31Z]   task 1: starting agent loop
+[2026-05-24T08:11:37Z]   task 1: done iterations=9 stop=stop duration=66180ms
+[2026-05-24T08:11:41Z]   task 1: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:11:41Z]   task 2: reset to 2fd7d38
+[2026-05-24T08:11:41Z]   task 2: starting agent loop
+[2026-05-24T08:12:46Z]   task 2: done iterations=9 stop=stop duration=64520ms
+[2026-05-24T08:12:50Z]   task 2: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:12:50Z]   task 3: reset to 2fd7d38
+[2026-05-24T08:12:50Z]   task 3: starting agent loop
+[2026-05-24T08:15:31Z]   task 3: done iterations=19 stop=stop duration=160583ms
+[2026-05-24T08:15:35Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:15:35Z]   task 4: reset to 2fd7d38
+[2026-05-24T08:15:35Z]   task 4: starting agent loop
+[2026-05-24T08:16:26Z]   task 4: done iterations=11 stop=stop duration=51099ms
+[2026-05-24T08:16:30Z]   task 4: score=100/100 committed=True tests=True scope=True
+[2026-05-24T08:16:30Z]   task 5: reset to 2fd7d38
+[2026-05-24T08:16:31Z]   task 5: starting agent loop
+[2026-05-24T08:27:15Z]   task 5: done iterations=8 stop=http error: timed out duration=644330ms
+[2026-05-24T08:27:19Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:27:19Z] === model=qwen3.6-35b-a3b-q8-retry (id=qwen3.6-35b-a3b-q8_0) ===
+[2026-05-24T08:27:19Z]   task 1: reset to 2fd7d38
+[2026-05-24T08:27:19Z]   task 1: starting agent loop
+[2026-05-24T08:29:23Z]   task 1: done iterations=9 stop=stop duration=124321ms
+[2026-05-24T08:29:28Z]   task 1: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:29:28Z]   task 2: reset to 2fd7d38
+[2026-05-24T08:29:28Z]   task 2: starting agent loop
+[2026-05-24T08:30:35Z]   task 2: done iterations=9 stop=stop duration=66880ms
+[2026-05-24T08:30:39Z]   task 2: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:30:39Z]   task 3: reset to 2fd7d38
+[2026-05-24T08:30:39Z]   task 3: starting agent loop
+[2026-05-24T08:32:48Z]   task 3: done iterations=14 stop=stop duration=129406ms
+[2026-05-24T08:32:52Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:32:52Z]   task 4: reset to 2fd7d38
+[2026-05-24T08:32:52Z]   task 4: starting agent loop
+[2026-05-24T08:33:47Z]   task 4: done iterations=11 stop=stop duration=54870ms
+[2026-05-24T08:33:51Z]   task 4: score=100/100 committed=True tests=True scope=True
+[2026-05-24T08:33:51Z]   task 5: reset to 2fd7d38
+[2026-05-24T08:33:51Z]   task 5: starting agent loop
+[2026-05-24T08:35:23Z]   task 5: done iterations=17 stop=stop duration=91044ms
+[2026-05-24T08:35:27Z]   task 5: score=97/100 committed=True tests=True scope=True
+[2026-05-24T08:35:27Z] === model=gemma4-26b-a4b-q8-retry (id=gemma4-26b-a4b-q8_0) ===
+[2026-05-24T08:35:27Z]   task 1: reset to 2fd7d38
+[2026-05-24T08:35:27Z]   task 1: starting agent loop
+[2026-05-24T08:38:01Z]   task 1: done iterations=16 stop=stop duration=154611ms
+[2026-05-24T08:38:05Z]   task 1: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:38:05Z]   task 2: reset to 2fd7d38
+[2026-05-24T08:38:06Z]   task 2: starting agent loop
+[2026-05-24T08:38:50Z]   task 2: done iterations=7 stop=stop duration=44576ms
+[2026-05-24T08:38:54Z]   task 2: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:38:54Z]   task 3: reset to 2fd7d38
+[2026-05-24T08:38:54Z]   task 3: starting agent loop
+[2026-05-24T08:41:15Z]   task 3: done iterations=17 stop=stop duration=140645ms
+[2026-05-24T08:41:19Z]   task 3: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:41:19Z]   task 4: reset to 2fd7d38
+[2026-05-24T08:41:19Z]   task 4: starting agent loop
+[2026-05-24T08:46:15Z]   task 4: done iterations=14 stop=stop duration=295788ms
+[2026-05-24T08:46:19Z]   task 4: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:46:19Z]   task 5: reset to 2fd7d38
+[2026-05-24T08:46:19Z]   task 5: starting agent loop
+[2026-05-24T08:48:08Z]   task 5: done iterations=10 stop=stop duration=109168ms
+[2026-05-24T08:48:12Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T08:48:12Z] sweep complete in 65.2 min

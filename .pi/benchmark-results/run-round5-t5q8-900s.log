@@ -1,0 +1,7 @@
+[2026-05-24T09:23:04Z] endpoint=http://10.97.2.98:9292/v1/chat/completions models=['qwopus3.6-35b-a3b-v1-q8-t5-15min'] tasks=[5]
+[2026-05-24T09:23:04Z] === model=qwopus3.6-35b-a3b-v1-q8-t5-15min (id=qwopus3.6-35b-a3b-v1-q8_0) ===
+[2026-05-24T09:23:04Z]   task 5: reset to 2fd7d38
+[2026-05-24T09:23:04Z]   task 5: starting agent loop
+[2026-05-24T09:38:47Z]   task 5: done iterations=8 stop=http error: timed out duration=942630ms
+[2026-05-24T09:38:51Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-05-24T09:38:51Z] sweep complete in 15.8 min

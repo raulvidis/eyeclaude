@@ -1,0 +1,23 @@
+[2026-06-18T11:26:37Z] endpoint=http://10.97.2.98:8081/v1/chat/completions models=['qwopus3.6-35b-v1-q4km-8081-nothink-withretry'] tasks=[1, 2, 3, 4, 5]
+[2026-06-18T11:26:37Z] === model=qwopus3.6-35b-v1-q4km-8081-nothink-withretry (id=Qwopus3.6-35B-A3B-v1-Q4_K_M.gguf) ===
+[2026-06-18T11:26:37Z]   task 1: reset to 2fd7d38
+[2026-06-18T11:26:37Z]   task 1: starting agent loop
+[2026-06-18T11:27:10Z]   task 1: done iterations=8 stop=stop duration=33470ms
+[2026-06-18T11:27:15Z]   task 1: score=100/100 committed=True tests=True scope=True
+[2026-06-18T11:27:15Z]   task 2: reset to 2fd7d38
+[2026-06-18T11:27:15Z]   task 2: starting agent loop
+[2026-06-18T11:27:52Z]   task 2: done iterations=11 stop=stop duration=37683ms
+[2026-06-18T11:27:56Z]   task 2: score=100/100 committed=True tests=True scope=True
+[2026-06-18T11:27:56Z]   task 3: reset to 2fd7d38
+[2026-06-18T11:27:56Z]   task 3: starting agent loop
+[2026-06-18T11:29:10Z]   task 3: done iterations=20 stop=stop duration=73846ms
+[2026-06-18T11:29:14Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-06-18T11:29:14Z]   task 4: reset to 2fd7d38
+[2026-06-18T11:29:15Z]   task 4: starting agent loop
+[2026-06-18T11:29:46Z]   task 4: done iterations=13 stop=stop duration=31808ms
+[2026-06-18T11:29:50Z]   task 4: score=100/100 committed=True tests=True scope=True
+[2026-06-18T11:29:50Z]   task 5: reset to 2fd7d38
+[2026-06-18T11:29:51Z]   task 5: starting agent loop
+[2026-06-18T11:30:43Z]   task 5: done iterations=15 stop=stop duration=52083ms
+[2026-06-18T11:30:47Z]   task 5: score=100/100 committed=True tests=True scope=True
+[2026-06-18T11:30:47Z] sweep complete in 4.2 min

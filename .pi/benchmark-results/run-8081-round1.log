@@ -1,0 +1,23 @@
+[2026-06-18T10:46:52Z] endpoint=http://10.97.2.98:8081/v1/chat/completions models=['qwopus3.6-35b-v1-q4km-8081'] tasks=[1, 2, 3, 4, 5]
+[2026-06-18T10:46:52Z] === model=qwopus3.6-35b-v1-q4km-8081 (id=Qwopus3.6-35B-A3B-v1-Q4_K_M.gguf) ===
+[2026-06-18T10:46:52Z]   task 1: reset to 2fd7d38
+[2026-06-18T10:46:52Z]   task 1: starting agent loop
+[2026-06-18T10:47:36Z]   task 1: done iterations=9 stop=stop duration=43624ms
+[2026-06-18T10:47:41Z]   task 1: score=100/100 committed=True tests=True scope=True
+[2026-06-18T10:47:41Z]   task 2: reset to 2fd7d38
+[2026-06-18T10:47:41Z]   task 2: starting agent loop
+[2026-06-18T10:48:29Z]   task 2: done iterations=10 stop=stop duration=48311ms
+[2026-06-18T10:48:33Z]   task 2: score=100/100 committed=True tests=True scope=True
+[2026-06-18T10:48:33Z]   task 3: reset to 2fd7d38
+[2026-06-18T10:48:33Z]   task 3: starting agent loop
+[2026-06-18T10:49:57Z]   task 3: done iterations=15 stop=stop duration=83558ms
+[2026-06-18T10:50:01Z]   task 3: score=97/100 committed=True tests=True scope=True
+[2026-06-18T10:50:01Z]   task 4: reset to 2fd7d38
+[2026-06-18T10:50:01Z]   task 4: starting agent loop
+[2026-06-18T10:50:42Z]   task 4: done iterations=12 stop=stop duration=40927ms
+[2026-06-18T10:50:46Z]   task 4: score=100/100 committed=True tests=True scope=True
+[2026-06-18T10:50:46Z]   task 5: reset to 2fd7d38
+[2026-06-18T10:50:46Z]   task 5: starting agent loop
+[2026-06-18T10:51:21Z]   task 5: done iterations=9 stop=http 500: {"error":{"code":500,"message":"The model produced output that does not match the expected peg-native format","type":"server_error"}} duration=34088ms
+[2026-06-18T10:51:25Z]   task 5: score=0/100 committed=False tests=True scope=True
+[2026-06-18T10:51:25Z] sweep complete in 4.5 min
