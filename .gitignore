@@ -15,3 +15,6 @@ build/
 # ...except the shared-skills symlink, which is per-machine (recreate via agent-repo-standards/link-skills.sh)
 /.agents/skills
 
+
+# Per-machine shared-rules copy (agent-repo-standards) — not tracked
+.agents/AGENTS.base.md
